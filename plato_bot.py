@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -9,6 +9,12 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
 from anthropic import Anthropic
+from calendar_module import (
+    get_calendar_service,
+    get_schedule_prompt,
+    clear_plato_events,
+    create_weekly_events
+)
 
 # Config
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -176,9 +182,63 @@ def add_pattern(pattern_type: str, description: str, project_id: str | None = No
     return result.data[0]
 
 
+# ============== CALENDAR HELPERS ==============
+
+PLAN_TRIGGERS = [
+    "plan my week", "plan the week", "schedule my week",
+    "what should my week look like", "weekly plan",
+    "plan this week", "plan next week"
+]
+
+
+def detect_plan_week(user_message: str) -> str | None:
+    """Check if user is asking to plan their week. Returns schedule prompt or None."""
+    msg_lower = user_message.lower()
+    
+    for trigger in PLAN_TRIGGERS:
+        if trigger in msg_lower:
+            today = datetime.now()
+            if "next week" in msg_lower:
+                days_ahead = 7 - today.weekday()
+                week_start = today + timedelta(days=days_ahead)
+            else:
+                week_start = today - timedelta(days=today.weekday())
+            
+            week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+            return get_schedule_prompt(week_start)
+    
+    return None
+
+
+def process_plan_week(action_data: dict) -> str:
+    """Process a plan_week action - create Google Calendar events."""
+    try:
+        events = action_data.get("events", [])
+        if not events:
+            return "⚠️ No events in schedule."
+        
+        service = get_calendar_service()
+        
+        # Determine week start from first event
+        first_date = datetime.strptime(events[0]["date"], "%Y-%m-%d")
+        week_start = first_date - timedelta(days=first_date.weekday())
+        
+        # Clear existing Plato events for this week
+        cleared = clear_plato_events(service, week_start)
+        
+        # Create new events
+        created = create_weekly_events(service, events)
+        
+        return f"📅 Scheduled {created} events (cleared {cleared} old ones)."
+    
+    except Exception as e:
+        logger.error(f"Calendar error: {e}")
+        return f"⚠️ Calendar error: {e}"
+
+
 # ============== CONTEXT ASSEMBLY ==============
 
-def build_system_prompt() -> str:
+def build_system_prompt(schedule_context: str = "") -> str:
     """Build Plato's system prompt with current context."""
     soul_doc = get_soul_doc()
     projects = get_active_projects()
@@ -265,6 +325,15 @@ Only include fields that are being updated.
 {{"action": "add_pattern", "pattern_type": "blocker|overestimation|external_constraint|bad_habit|avoidance", "description": "...", "project_slug": null}}
 ```
 
+8. **PLAN WEEK** - He wants his week scheduled on Google Calendar
+```json
+{{"action": "plan_week", "events": [
+    {{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "Short descriptive title", "description": "Optional detail", "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco"}}
+]}}
+```
+When planning a week, generate a COMPLETE schedule filling all free blocks. Be specific with titles (e.g. "CFA - Ethics Chapter 3" not just "CFA Study").
+Priorities: CFA study minimum 10 hrs/week, side projects 8-10 hrs/week, exercise 3+ sessions, rest every evening, Sunday evening light.
+
 ### GUIDELINES:
 - Available tags: coding, marketing, research, design, admin, learning, outreach
 - Available moods: energised, neutral, drained, frustrated, flow
@@ -274,7 +343,7 @@ Only include fields that are being updated.
 - If he's going off-track, call it out firmly but kindly
 
 Current date: {datetime.now().strftime("%Y-%m-%d")}
-"""
+{schedule_context}"""
 
 
 def build_messages_with_history(user_message: str) -> list[dict]:
@@ -376,6 +445,9 @@ def process_action(action_data: dict, raw_message: str) -> str | None:
             )
             logger.info(f"Added pattern: {action_data['pattern_type']}")
         
+        elif action == "plan_week":
+            return process_plan_week(action_data)
+        
         return None
     
     except Exception as e:
@@ -399,12 +471,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Save user message to history
     save_conversation("user", user_message)
     
-    system_prompt = build_system_prompt()
+    # Check if planning week — add schedule context if so
+    schedule_context = detect_plan_week(user_message) or ""
+    
+    system_prompt = build_system_prompt(schedule_context=schedule_context)
     messages = build_messages_with_history(user_message)
+    
+    # Use higher max_tokens for week planning (lots of JSON events)
+    max_tokens = 4096 if schedule_context else 1024
     
     response = anthropic.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=1024,
+        max_tokens=max_tokens,
         system=system_prompt,
         messages=messages
     )
@@ -428,7 +506,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Failed to parse action JSON: {e}")
     
-    # Prepend error message if any
+    # Prepend error/status message if any
     if error_msg:
         reply = f"{error_msg}\n\n{reply}"
     
