@@ -9,7 +9,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
 from anthropic import Anthropic
-from calendar_module import (
+from plato_calendar import (
     get_calendar_service,
     get_schedule_prompt,
     clear_plato_events,
