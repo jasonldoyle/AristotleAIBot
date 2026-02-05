@@ -76,6 +76,17 @@ def get_project_by_slug(slug: str) -> dict | None:
     return result.data[0] if result.data else None
 
 
+def get_recent_conversations(limit: int = 10) -> list[dict]:
+    """Fetch recent conversation history."""
+    result = supabase.table("conversations").select("*").order("created_at", desc=True).limit(limit).execute()
+    return list(reversed(result.data)) if result.data else []
+
+
+def save_conversation(role: str, content: str) -> None:
+    """Save a message to conversation history."""
+    supabase.table("conversations").insert({"role": role, "content": content}).execute()
+
+
 def log_work(project_id: str, summary: str, duration_mins: int | None, blockers: str | None, tags: list[str], mood: str | None, raw_message: str) -> dict:
     """Insert a project log entry."""
     entry = {
@@ -103,6 +114,57 @@ def create_project(name: str, slug: str, intent: str) -> dict:
     return result.data[0]
 
 
+def add_soul_doc_entry(content: str, category: str, trigger: str) -> dict:
+    """Add a new soul doc entry."""
+    entry = {
+        "content": content,
+        "category": category,
+        "trigger": trigger
+    }
+    result = supabase.table("soul_doc").insert(entry).execute()
+    return result.data[0]
+
+
+def add_project_goal(project_id: str, timeframe: str, goal_text: str, target_date: str | None = None) -> dict:
+    """Add a goal to a project."""
+    entry = {
+        "project_id": project_id,
+        "timeframe": timeframe,
+        "goal_text": goal_text,
+        "target_date": target_date
+    }
+    result = supabase.table("project_goals").insert(entry).execute()
+    return result.data[0]
+
+
+def mark_goal_achieved(project_slug: str, goal_text_fragment: str) -> bool:
+    """Mark a goal as achieved by matching partial text."""
+    project = get_project_by_slug(project_slug)
+    if not project:
+        return False
+    
+    goals = supabase.table("project_goals").select("*").eq("project_id", project["id"]).eq("achieved", False).execute()
+    
+    for goal in goals.data:
+        if goal_text_fragment.lower() in goal["goal_text"].lower():
+            supabase.table("project_goals").update({
+                "achieved": True,
+                "achieved_at": datetime.now().isoformat()
+            }).eq("id", goal["id"]).execute()
+            return True
+    return False
+
+
+def update_project(slug: str, updates: dict) -> bool:
+    """Update project details."""
+    project = get_project_by_slug(slug)
+    if not project:
+        return False
+    
+    supabase.table("projects").update(updates).eq("id", project["id"]).execute()
+    return True
+
+
 def add_pattern(pattern_type: str, description: str, project_id: str | None = None) -> dict:
     """Create a new pattern entry."""
     entry = {
@@ -128,6 +190,7 @@ def build_system_prompt() -> str:
         projects_context += f"Intent: {p['intent']}\n"
         projects_context += f"Target: {p.get('target_date', 'No deadline')}\n"
         projects_context += f"Weekly hours allocated: {p.get('estimated_weekly_hours', 'Not set')}\n"
+        projects_context += f"Stick/Twist: {p.get('stick_twist_criteria', 'Not defined')}\n"
         
         if p.get("current_goals"):
             projects_context += "Current goals:\n"
@@ -162,30 +225,162 @@ Your role:
 {patterns_context}
 
 ## YOUR CAPABILITIES
-When Jason messages you, determine the intent:
-1. LOGGING WORK - He's reporting what he did. Extract: project (slug), summary, duration, blockers, tags, mood. Respond with the log confirmation AND perspective on progress.
-2. SEEKING ADVICE - He wants to discuss something. Use Soul Doc to ground your response.
-3. NEW IMPULSE - He's proposing something new. Challenge it against his existing commitments.
-4. CHECK-IN - He's asking where he stands. Summarise progress honestly.
-5. CREATE PROJECT - He wants to add a new project. Extract name, slug, and intent.
+When Jason messages you, determine the intent and respond with the appropriate JSON action block followed by your message.
 
-When logging work, respond with valid JSON in this format, followed by your message:
+### ACTIONS YOU CAN TAKE:
+
+1. **LOG WORK** - He's reporting what he did
 ```json
 {{"action": "log", "project_slug": "...", "summary": "...", "duration_mins": null, "blockers": null, "tags": [], "mood": null}}
 ```
 
-When creating a project, respond with valid JSON in this format, followed by your message:
+2. **CREATE PROJECT** - He wants to add a new project
 ```json
 {{"action": "create_project", "name": "...", "slug": "...", "intent": "..."}}
 ```
 
-Available tags: coding, marketing, research, design, admin, learning, outreach
-Available moods: energised, neutral, drained, frustrated, flow
+3. **ADD SOUL DOC** - He says "soullog:/" or wants to record a life principle/goal
+```json
+{{"action": "add_soul", "content": "...", "category": "goal_lifetime|goal_5yr|goal_2yr|goal_1yr|philosophy|rule|anti_pattern", "trigger": "..."}}
+```
 
-If you detect a pattern (3+ similar blockers, repeated misses), note it.
+4. **SET PROJECT GOAL** - He wants to set a weekly/monthly/quarterly goal
+```json
+{{"action": "add_goal", "project_slug": "...", "timeframe": "weekly|monthly|quarterly|milestone", "goal_text": "...", "target_date": null}}
+```
+
+5. **MARK GOAL ACHIEVED** - He completed a goal
+```json
+{{"action": "achieve_goal", "project_slug": "...", "goal_fragment": "..."}}
+```
+
+6. **UPDATE PROJECT** - He wants to change project details
+```json
+{{"action": "update_project", "slug": "...", "updates": {{"target_date": null, "estimated_weekly_hours": null, "stick_twist_criteria": null, "alignment_rationale": null}}}}
+```
+Only include fields that are being updated.
+
+7. **LOG PATTERN** - He's noticed a recurring behaviour
+```json
+{{"action": "add_pattern", "pattern_type": "blocker|overestimation|external_constraint|bad_habit|avoidance", "description": "...", "project_slug": null}}
+```
+
+### GUIDELINES:
+- Available tags: coding, marketing, research, design, admin, learning, outreach
+- Available moods: energised, neutral, drained, frustrated, flow
+- If no action is needed (just conversation), don't include a JSON block
+- Always provide your mentorship response AFTER the JSON block
+- Be concise but insightful
+- If he's going off-track, call it out firmly but kindly
 
 Current date: {datetime.now().strftime("%Y-%m-%d")}
 """
+
+
+def build_messages_with_history(user_message: str) -> list[dict]:
+    """Build message list including conversation history."""
+    history = get_recent_conversations(limit=10)
+    
+    messages = []
+    for msg in history:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    
+    messages.append({"role": "user", "content": user_message})
+    
+    return messages
+
+
+# ============== ACTION PROCESSING ==============
+
+def process_action(action_data: dict, raw_message: str) -> str | None:
+    """Process a JSON action and return a status message if needed."""
+    action = action_data.get("action")
+    
+    try:
+        if action == "log":
+            project = get_project_by_slug(action_data["project_slug"])
+            if project:
+                log_work(
+                    project_id=project["id"],
+                    summary=action_data["summary"],
+                    duration_mins=action_data.get("duration_mins"),
+                    blockers=action_data.get("blockers"),
+                    tags=action_data.get("tags", []),
+                    mood=action_data.get("mood"),
+                    raw_message=raw_message
+                )
+                logger.info(f"Logged work for {action_data['project_slug']}")
+            else:
+                return f"⚠️ Project '{action_data['project_slug']}' not found."
+        
+        elif action == "create_project":
+            create_project(
+                name=action_data["name"],
+                slug=action_data["slug"],
+                intent=action_data["intent"]
+            )
+            logger.info(f"Created project: {action_data['slug']}")
+        
+        elif action == "add_soul":
+            add_soul_doc_entry(
+                content=action_data["content"],
+                category=action_data["category"],
+                trigger=action_data.get("trigger", "Conversation")
+            )
+            logger.info(f"Added soul doc entry: {action_data['category']}")
+        
+        elif action == "add_goal":
+            project = get_project_by_slug(action_data["project_slug"])
+            if project:
+                add_project_goal(
+                    project_id=project["id"],
+                    timeframe=action_data["timeframe"],
+                    goal_text=action_data["goal_text"],
+                    target_date=action_data.get("target_date")
+                )
+                logger.info(f"Added {action_data['timeframe']} goal to {action_data['project_slug']}")
+            else:
+                return f"⚠️ Project '{action_data['project_slug']}' not found."
+        
+        elif action == "achieve_goal":
+            success = mark_goal_achieved(
+                project_slug=action_data["project_slug"],
+                goal_text_fragment=action_data["goal_fragment"]
+            )
+            if success:
+                logger.info(f"Marked goal achieved for {action_data['project_slug']}")
+            else:
+                return f"⚠️ Couldn't find matching goal for '{action_data['goal_fragment']}'."
+        
+        elif action == "update_project":
+            success = update_project(
+                slug=action_data["slug"],
+                updates=action_data["updates"]
+            )
+            if success:
+                logger.info(f"Updated project: {action_data['slug']}")
+            else:
+                return f"⚠️ Project '{action_data['slug']}' not found."
+        
+        elif action == "add_pattern":
+            project_id = None
+            if action_data.get("project_slug"):
+                project = get_project_by_slug(action_data["project_slug"])
+                if project:
+                    project_id = project["id"]
+            
+            add_pattern(
+                pattern_type=action_data["pattern_type"],
+                description=action_data["description"],
+                project_id=project_id
+            )
+            logger.info(f"Added pattern: {action_data['pattern_type']}")
+        
+        return None
+    
+    except Exception as e:
+        logger.error(f"Action processing error: {e}")
+        return f"⚠️ Error processing action: {str(e)}"
 
 
 # ============== MESSAGE HANDLING ==============
@@ -201,19 +396,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_message = update.message.text
     logger.info(f"Received: {user_message}")
     
+    # Save user message to history
+    save_conversation("user", user_message)
+    
     system_prompt = build_system_prompt()
+    messages = build_messages_with_history(user_message)
     
     response = anthropic.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1024,
         system=system_prompt,
-        messages=[
-            {"role": "user", "content": user_message}
-        ]
+        messages=messages
     )
     
     reply = response.content[0].text
+    error_msg = None
     
+    # Process JSON action if present
     if "```json" in reply:
         try:
             json_start = reply.index("```json") + 7
@@ -221,32 +420,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             json_str = reply[json_start:json_end].strip()
             action_data = json.loads(json_str)
             
-            if action_data.get("action") == "log":
-                project = get_project_by_slug(action_data["project_slug"])
-                if project:
-                    log_work(
-                        project_id=project["id"],
-                        summary=action_data["summary"],
-                        duration_mins=action_data.get("duration_mins"),
-                        blockers=action_data.get("blockers"),
-                        tags=action_data.get("tags", []),
-                        mood=action_data.get("mood"),
-                        raw_message=user_message
-                    )
-                    logger.info(f"Logged work for {action_data['project_slug']}")
+            error_msg = process_action(action_data, user_message)
             
-            elif action_data.get("action") == "create_project":
-                create_project(
-                    name=action_data["name"],
-                    slug=action_data["slug"],
-                    intent=action_data["intent"]
-                )
-                logger.info(f"Created project: {action_data['slug']}")
-            
+            # Remove JSON block from reply
             reply = reply[:reply.index("```json")] + reply[json_end + 3:]
             reply = reply.strip()
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Failed to parse action JSON: {e}")
+    
+    # Prepend error message if any
+    if error_msg:
+        reply = f"{error_msg}\n\n{reply}"
+    
+    # Save assistant response to history
+    save_conversation("assistant", reply)
     
     await update.message.reply_text(reply)
 
@@ -268,12 +455,23 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     msg = "**Current Status**\n\n"
     for p in projects:
-        msg += f"• {p['name']}: {len(p.get('recent_logs', []))} logs this week\n"
+        msg += f"• {p['name']}: {len(p.get('recent_logs', []))} recent logs\n"
+        if p.get("current_goals"):
+            msg += f"  Goals: {len(p['current_goals'])} active\n"
     
     if patterns:
         msg += f"\n⚠️ {len(patterns)} unresolved patterns"
     
     await update.message.reply_text(msg)
+
+
+async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /clear command - clear conversation history."""
+    if update.effective_user.id != ALLOWED_USER_ID:
+        return
+    
+    supabase.table("conversations").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+    await update.message.reply_text("Conversation history cleared. Fresh start.")
 
 
 # ============== MAIN ==============
@@ -284,6 +482,7 @@ def main() -> None:
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("clear", clear_history))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logger.info("Plato is starting...")
