@@ -185,6 +185,39 @@ def add_pattern(pattern_type: str, description: str, project_id: str | None = No
     return result.data[0]
 
 
+def park_idea(idea: str, context: str = None) -> dict:
+    """Park an idea for later evaluation."""
+    eligible = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
+    entry = {
+        "idea": idea,
+        "context": context,
+        "eligible_date": eligible,
+        "status": "parked"
+    }
+    result = supabase.table("idea_parking_lot").insert(entry).execute()
+    return result.data[0]
+
+
+def get_parked_ideas() -> list[dict]:
+    """Fetch all currently parked ideas."""
+    result = supabase.table("idea_parking_lot").select("*").eq("status", "parked").order("parked_at", desc=True).execute()
+    return result.data
+
+
+def resolve_idea(idea_fragment: str, status: str, notes: str = None) -> bool:
+    """Resolve a parked idea by matching partial text."""
+    ideas = get_parked_ideas()
+    for idea in ideas:
+        if idea_fragment.lower() in idea["idea"].lower():
+            supabase.table("idea_parking_lot").update({
+                "status": status,
+                "resolution_notes": notes,
+                "resolved_at": datetime.now().isoformat()
+            }).eq("id", idea["id"]).execute()
+            return True
+    return False
+
+
 # ============== FITNESS HELPERS ==============
 
 def log_fitness_exercises(exercises: list[dict]) -> int:
@@ -579,6 +612,7 @@ def build_system_prompt(schedule_context: str = "") -> str:
     projects = get_active_projects()
     patterns = get_unresolved_patterns()
     recent_fitness = get_recent_fitness(days=7)
+    parked_ideas = get_parked_ideas()
     
     projects_context = ""
     for p in projects:
@@ -617,6 +651,16 @@ def build_system_prompt(schedule_context: str = "") -> str:
         for date, exercises in by_date.items():
             fitness_context += f"  {date}: {', '.join(exercises)}\n"
     
+    ideas_context = ""
+    if parked_ideas:
+        ideas_context = "\n## IDEA PARKING LOT\n"
+        for idea in parked_ideas:
+            days_left = (datetime.strptime(idea["eligible_date"], "%Y-%m-%d") - datetime.now()).days
+            if days_left > 0:
+                ideas_context += f"- 💡 {idea['idea']} (parked {idea['parked_at'][:10]}, {days_left} days until eligible)\n"
+            else:
+                ideas_context += f"- 🟢 {idea['idea']} (ELIGIBLE — parked {idea['parked_at'][:10]}, ready for review)\n"
+
     # Get today's schedule for context
     today_schedule = ""
     try:
@@ -647,6 +691,7 @@ Your role:
 {projects_context}
 {patterns_context}
 {fitness_context}
+{ideas_context}
 {today_schedule}
 
 ## YOUR CAPABILITIES
@@ -732,6 +777,20 @@ This will also cancel any conflicting planned blocks.
 ```
 When Jason reports back after a work block (or responds to a nudge), log what he actually did vs what was planned.
 If event_id is null, find the most recent ended planned block for today.
+
+13. **PARK IDEA** - He mentions a new project or idea that isn't aligned with current commitments
+```json
+{{"action": "park_idea", "idea": "Short description of the idea", "context": "Why it came up"}}
+```
+Use this when Jason floats a new idea, side project, or learning goal. Don't create a project — park it.
+Tell him it's been parked, the 2-week rule applies, and redirect him to his current commitments.
+If an idea in the parking lot has passed its 2-week eligible date, mention it and ask if he still wants to pursue it.
+
+14. **RESOLVE IDEA** - Approve or reject a parked idea after the cooling period
+```json
+{{"action": "resolve_idea", "idea_fragment": "partial match text", "status": "approved|rejected", "notes": "Why"}}
+```
+Only approve if it genuinely aligns with Soul Doc goals and current capacity allows it.
 
 ### GUIDELINES:
 - Available tags: coding, marketing, research, design, admin, learning, outreach
@@ -861,6 +920,25 @@ def process_action(action_data: dict, raw_message: str) -> str | None:
         
         elif action == "check_in":
             return process_check_in(action_data)
+        
+        elif action == "park_idea":
+            idea = park_idea(
+                idea=action_data["idea"],
+                context=action_data.get("context")
+            )
+            eligible = idea["eligible_date"]
+            return f"💡 Parked: \"{action_data['idea']}\"\nEligible for review: {eligible}"
+        
+        elif action == "resolve_idea":
+            success = resolve_idea(
+                idea_fragment=action_data["idea_fragment"],
+                status=action_data["status"],
+                notes=action_data.get("notes")
+            )
+            if success:
+                return f"{'✅' if action_data['status'] == 'approved' else '❌'} Idea resolved: {action_data['status']}"
+            else:
+                return f"⚠️ Couldn't find parked idea matching '{action_data['idea_fragment']}'"
         
         return None
     
