@@ -205,6 +205,26 @@ def log_fitness_exercises(exercises: list[dict]) -> int:
     return count
 
 
+def store_pending_plan(events: list[dict]) -> None:
+    """Store a pending weekly plan for approval."""
+    # Clear any existing pending plan
+    supabase.table("pending_plan").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+    supabase.table("pending_plan").insert({"events": json.dumps(events)}).execute()
+
+
+def get_pending_plan() -> list[dict] | None:
+    """Retrieve the pending plan if one exists."""
+    result = supabase.table("pending_plan").select("*").order("created_at", desc=True).limit(1).execute()
+    if result.data:
+        return json.loads(result.data[0]["events"])
+    return None
+
+
+def clear_pending_plan() -> None:
+    """Clear the pending plan after approval or rejection."""
+    supabase.table("pending_plan").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+
+
 def get_recent_fitness(days: int = 7) -> list[dict]:
     """Fetch fitness logs from the last N days."""
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -330,11 +350,45 @@ def detect_plan_week(user_message: str) -> str | None:
 
 
 def process_plan_week(action_data: dict) -> str:
-    """Process a plan_week action - create Google Calendar events and store for tracking."""
+    """Process a plan_week action - store as pending for approval."""
     try:
         events = action_data.get("events", [])
         if not events:
             return "⚠️ No events in schedule."
+        
+        # Store for approval instead of pushing directly
+        store_pending_plan(events)
+        
+        # Build readable summary
+        by_date = {}
+        for e in events:
+            d = e["date"]
+            if d not in by_date:
+                by_date[d] = []
+            by_date[d].append(f"  {e['start']}-{e['end']}: {e['title']}")
+        
+        summary = "📋 PROPOSED SCHEDULE:\n\n"
+        for date in sorted(by_date.keys()):
+            day_name = datetime.strptime(date, "%Y-%m-%d").strftime("%A %b %d")
+            summary += f"{day_name}:\n"
+            summary += "\n".join(by_date[date]) + "\n\n"
+        
+        summary += f"Total: {len(events)} blocks.\n"
+        summary += "Say 'approve' to push to calendar, or tell me what to change."
+        
+        return summary
+    
+    except Exception as e:
+        logger.error(f"Plan week error: {e}")
+        return f"⚠️ Plan error: {e}"
+
+
+def process_approve_plan() -> str:
+    """Push the pending plan to Google Calendar."""
+    try:
+        events = get_pending_plan()
+        if not events:
+            return "⚠️ No pending plan to approve. Say 'plan my week' first."
         
         service = get_calendar_service()
         
@@ -351,11 +405,14 @@ def process_plan_week(action_data: dict) -> str:
         # Store in schedule_events table for adherence tracking
         stored = store_schedule_events(events)
         
-        return f"📅 Scheduled {created} events (cleared {cleared} old ones). Tracking {stored} blocks."
+        # Clear the pending plan
+        clear_pending_plan()
+        
+        return f"📅 Approved! Scheduled {created} events (cleared {cleared} old ones). Tracking {stored} blocks."
     
     except Exception as e:
-        logger.error(f"Calendar error: {e}")
-        return f"⚠️ Calendar error: {e}"
+        logger.error(f"Approve plan error: {e}")
+        return f"⚠️ Error pushing plan: {e}"
 
 
 def process_audrey_time(action_data: dict) -> str:
@@ -828,14 +885,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Save user message to history
     save_conversation("user", user_message)
     
+    # Check for plan approval/rejection
+    msg_lower = user_message.lower().strip()
+    if msg_lower in ["approve", "approved", "looks good", "push it", "send it", "go ahead", "lgtm"]:
+        result = process_approve_plan()
+        save_conversation("assistant", result)
+        await update.message.reply_text(result)
+        return
+    
     # Check if planning week — add schedule context if so
     schedule_context = detect_plan_week(user_message) or ""
     
-    system_prompt = build_system_prompt(schedule_context=schedule_context)
+    # If there's a pending plan and user is requesting changes, include it in context
+    pending_plan_context = ""
+    pending = get_pending_plan()
+    if pending and not schedule_context:
+        pending_plan_context = f"\n\n## PENDING PLAN (awaiting approval)\nThere is a pending weekly plan with {len(pending)} events. The user may be requesting changes to it. If they request changes, generate a new plan_week action with the modified events.\n"
+    
+    system_prompt = build_system_prompt(schedule_context=schedule_context + pending_plan_context)
     messages = build_messages_with_history(user_message)
     
     # Use higher max_tokens for week planning (lots of JSON events)
-    max_tokens = 4096 if schedule_context else 1024
+    max_tokens = 4096 if (schedule_context or pending_plan_context) else 1024
     
     response = anthropic_client.messages.create(
         model="claude-sonnet-4-20250514",
