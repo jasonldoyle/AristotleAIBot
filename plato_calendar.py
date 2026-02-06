@@ -1,6 +1,6 @@
 """
-Plato Calendar Module
-Handles Google Calendar integration for weekly planning.
+Plato Calendar Module v3
+Handles Google Calendar integration, weekly planning, and schedule tracking.
 """
 
 import os
@@ -36,16 +36,19 @@ def get_weekly_template(week_start: datetime) -> dict:
     
     Until March 1st 2026: WFH Mon, Tue, Fri | Office Wed, Thu
     After March 1st 2026: WFH Mon, Fri | Office Tue, Wed, Thu
+    
+    Fixed commitments:
+    - Gym: Mon & Tue 18:00-19:40 (travel + session)
+    - Mam's guzheng: Sat & Sun 09:15-10:45 and 19:00-20:30
+    - Click & collect: Saturday ~10:45-11:15 (on way home from guzheng drop-off)
     """
     
     cutover = datetime(2026, 3, 1)
     
     if week_start < cutover:
         office_days = [2, 3]  # Wed=2, Thu=3 (0-indexed from Mon)
-        wfh_days = [0, 1, 4]  # Mon, Tue, Fri
     else:
         office_days = [1, 2, 3]  # Tue, Wed, Thu
-        wfh_days = [0, 4]  # Mon, Fri
 
     template = {
         "week_start": week_start.isoformat(),
@@ -58,6 +61,7 @@ def get_weekly_template(week_start: datetime) -> dict:
         
         if day_offset < 5:  # Weekday
             is_office = day_offset in office_days
+            is_gym_day = day_offset in [0, 1]  # Mon=0, Tue=1
             
             if is_office:
                 blocks = [
@@ -68,11 +72,21 @@ def get_weekly_template(week_start: datetime) -> dict:
                     {"start": "19:30", "end": "23:00", "type": "free", "label": "Evening block (3.5 hrs)"},
                 ]
             else:
-                blocks = [
-                    {"start": "07:30", "end": "09:00", "type": "free", "label": "Morning block (1.5 hrs)"},
-                    {"start": "09:00", "end": "18:00", "type": "work", "label": "Citco (WFH)"},
-                    {"start": "18:00", "end": "23:00", "type": "free", "label": "Evening block (5 hrs)"},
-                ]
+                if is_gym_day:
+                    blocks = [
+                        {"start": "07:30", "end": "09:00", "type": "free", "label": "Morning block (1.5 hrs)"},
+                        {"start": "09:00", "end": "18:00", "type": "work", "label": "Citco (WFH)"},
+                        {"start": "18:00", "end": "18:15", "type": "commute", "label": "Travel to gym"},
+                        {"start": "18:15", "end": "19:20", "type": "fixed", "label": "Gym session"},
+                        {"start": "19:20", "end": "19:40", "type": "commute", "label": "Travel home from gym"},
+                        {"start": "19:40", "end": "23:00", "type": "free", "label": "Evening block (3.3 hrs)"},
+                    ]
+                else:
+                    blocks = [
+                        {"start": "07:30", "end": "09:00", "type": "free", "label": "Morning block (1.5 hrs)"},
+                        {"start": "09:00", "end": "18:00", "type": "work", "label": "Citco (WFH)"},
+                        {"start": "18:00", "end": "23:00", "type": "free", "label": "Evening block (5 hrs)"},
+                    ]
             
             template["days"].append({
                 "date": current_date.strftime("%Y-%m-%d"),
@@ -82,13 +96,23 @@ def get_weekly_template(week_start: datetime) -> dict:
             })
         
         else:  # Weekend
-            blocks = [
-                {"start": "07:30", "end": "09:15", "type": "free", "label": "Early morning (1.75 hrs)"},
-                {"start": "09:15", "end": "10:45", "type": "fixed", "label": "Drive mam to guzheng school"},
-                {"start": "10:45", "end": "19:00", "type": "free", "label": "Main block (8.25 hrs)"},
-                {"start": "19:00", "end": "20:30", "type": "fixed", "label": "Pick up mam from guzheng"},
-                {"start": "20:30", "end": "23:00", "type": "free", "label": "Evening block (2.5 hrs)"},
-            ]
+            if day_offset == 5:  # Saturday
+                blocks = [
+                    {"start": "07:30", "end": "09:15", "type": "free", "label": "Early morning (1.75 hrs)"},
+                    {"start": "09:15", "end": "10:45", "type": "fixed", "label": "Drive mam to guzheng school"},
+                    {"start": "10:45", "end": "11:15", "type": "fixed", "label": "Click & collect groceries (on way home)"},
+                    {"start": "11:15", "end": "19:00", "type": "free", "label": "Main block (7.75 hrs)"},
+                    {"start": "19:00", "end": "20:30", "type": "fixed", "label": "Pick up mam from guzheng"},
+                    {"start": "20:30", "end": "23:00", "type": "free", "label": "Evening block (2.5 hrs)"},
+                ]
+            else:  # Sunday
+                blocks = [
+                    {"start": "07:30", "end": "09:15", "type": "free", "label": "Early morning (1.75 hrs)"},
+                    {"start": "09:15", "end": "10:45", "type": "fixed", "label": "Drive mam to guzheng school"},
+                    {"start": "10:45", "end": "19:00", "type": "free", "label": "Main block (8.25 hrs)"},
+                    {"start": "19:00", "end": "20:30", "type": "fixed", "label": "Pick up mam from guzheng"},
+                    {"start": "20:30", "end": "23:00", "type": "free", "label": "Evening block (2.5 hrs — keep light, wind down)"},
+                ]
             
             template["days"].append({
                 "date": current_date.strftime("%Y-%m-%d"),
@@ -125,6 +149,57 @@ def clear_plato_events(service, week_start: datetime):
     return deleted
 
 
+def cancel_evening_events(service, date_str: str, from_time: str = "18:00"):
+    """Cancel Plato events for a specific evening. Returns list of cancelled event titles."""
+    cancelled = []
+    
+    events_result = service.events().list(
+        calendarId='primary',
+        timeMin=f'{date_str}T{from_time}:00+00:00',
+        timeMax=f'{date_str}T23:59:00+00:00',
+        singleEvents=True,
+        q='[Plato]'
+    ).execute()
+    
+    for event in events_result.get('items', []):
+        if '[Plato]' in event.get('summary', ''):
+            title = event['summary'].replace('[Plato] ', '')
+            service.events().delete(calendarId='primary', eventId=event['id']).execute()
+            cancelled.append({
+                "title": title,
+                "start": event['start'].get('dateTime', ''),
+                "end": event['end'].get('dateTime', '')
+            })
+    
+    return cancelled
+
+
+def get_todays_events(service, date_str: str = None):
+    """Get all Plato events for a given date."""
+    if not date_str:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+    
+    events_result = service.events().list(
+        calendarId='primary',
+        timeMin=f'{date_str}T00:00:00+00:00',
+        timeMax=f'{date_str}T23:59:00+00:00',
+        singleEvents=True,
+        orderBy='startTime',
+        q='[Plato]'
+    ).execute()
+    
+    return [
+        {
+            "title": e['summary'].replace('[Plato] ', ''),
+            "start": e['start'].get('dateTime', ''),
+            "end": e['end'].get('dateTime', ''),
+            "id": e['id']
+        }
+        for e in events_result.get('items', [])
+        if '[Plato]' in e.get('summary', '')
+    ]
+
+
 def create_event(service, date_str: str, start_time: str, end_time: str, 
                  title: str, description: str = None, color_id: str = None):
     """Create a single Google Calendar event."""
@@ -152,36 +227,19 @@ def create_event(service, date_str: str, start_time: str, end_time: str,
 
 
 def create_weekly_events(service, schedule_events: list):
-    """
-    Create all events from Plato's planned schedule.
+    """Create all events from Plato's planned schedule."""
     
-    schedule_events is a list of dicts from Claude:
-    [
-        {
-            "date": "2026-02-10",
-            "start": "19:30",
-            "end": "21:00",
-            "title": "CFA Study - Quantitative Methods",
-            "description": "Focus on probability distributions chapter",
-            "category": "cfa"  
-        },
-        ...
-    ]
-    """
-    
-    # Color mapping for Google Calendar
-    # 1=Lavender, 2=Sage, 3=Grape, 4=Flamingo, 5=Banana
-    # 6=Tangerine, 7=Peacock, 8=Graphite, 9=Blueberry, 10=Basil, 11=Tomato
     COLOR_MAP = {
-        "cfa": "9",          # Blueberry - study
-        "nitrogen": "10",    # Basil - project
-        "glowbook": "6",     # Tangerine - project  
-        "plato": "7",        # Peacock - project
-        "leetcode": "3",     # Grape - interview prep
-        "rest": "8",         # Graphite - downtime
-        "exercise": "2",     # Sage - health
-        "personal": "4",     # Flamingo - personal
-        "citco": "1",        # Lavender - work project
+        "cfa": "9",          # Blueberry
+        "nitrogen": "10",    # Basil
+        "glowbook": "6",     # Tangerine
+        "plato": "7",        # Peacock
+        "leetcode": "3",     # Grape
+        "rest": "8",         # Graphite
+        "exercise": "2",     # Sage
+        "personal": "4",     # Flamingo
+        "citco": "1",        # Lavender
+        "audrey": "11",      # Tomato
     }
     
     created_count = 0
@@ -207,10 +265,7 @@ def create_weekly_events(service, schedule_events: list):
 # ============== SCHEDULE PROMPT ==============
 
 def get_schedule_prompt(week_start: datetime) -> str:
-    """
-    Build the scheduling context for Claude.
-    Returns a prompt section describing the week template and what to plan.
-    """
+    """Build the scheduling context for Claude."""
     template = get_weekly_template(week_start)
     
     return f"""
@@ -228,13 +283,14 @@ You are planning Jason's week starting {week_start.strftime('%A %B %d, %Y')}.
 4. Side projects (Nitrogen Tracker, Glowbook) — aim for 8-10 hours/week combined
 5. LeetCode/interview prep — 3 sessions of 30-60 mins
 6. Rest/downtime — at least 1 hour every evening, one long rest block on weekend
-7. Exercise — at least 3 sessions/week
+7. Exercise — Mon & Tue gym sessions are already fixed in template
 8. Keep Sunday evening light — wind down for the work week
 9. Batch similar work: don't alternate between CFA and coding in the same evening
 10. Morning WFH blocks (07:30-09:00) are good for CFA study — fresh mind, no distractions
+11. Audrey time may be declared spontaneously — leave some buffer, don't over-optimise
 
 ### Response Format
-Return a JSON array of events. Each event:
+Return a plan_week action with an "events" array. Each event:
 ```
 {{
     "date": "YYYY-MM-DD",
@@ -242,11 +298,10 @@ Return a JSON array of events. Each event:
     "end": "HH:MM", 
     "title": "Short descriptive title",
     "description": "Optional detail or focus area",
-    "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco"
+    "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco|audrey"
 }}
 ```
 
-Wrap the full array in a plan_week action block.
 Include ALL allocated blocks for the week — study, projects, rest, exercise.
 Be specific with titles: "CFA - Ethics Chapter 3" not just "CFA Study".
 """

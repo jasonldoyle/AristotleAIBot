@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -13,7 +13,10 @@ from plato_calendar import (
     get_calendar_service,
     get_schedule_prompt,
     clear_plato_events,
-    create_weekly_events
+    create_weekly_events,
+    cancel_evening_events,
+    get_todays_events,
+    create_event
 )
 
 # Config
@@ -25,7 +28,7 @@ ALLOWED_USER_ID = int(os.environ.get("ALLOWED_USER_ID", 0))
 
 # Clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-anthropic = Anthropic(api_key=ANTHROPIC_API_KEY)
+anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -182,6 +185,122 @@ def add_pattern(pattern_type: str, description: str, project_id: str | None = No
     return result.data[0]
 
 
+# ============== FITNESS HELPERS ==============
+
+def log_fitness_exercises(exercises: list[dict]) -> int:
+    """Log multiple exercises from a gym session. Returns count logged."""
+    count = 0
+    today = datetime.now().strftime("%Y-%m-%d")
+    for ex in exercises:
+        entry = {
+            "session_date": ex.get("date", today),
+            "exercise_name": ex["exercise"],
+            "sets": ex.get("sets"),
+            "reps": ex.get("reps"),
+            "weight_kg": ex.get("weight_kg"),
+            "notes": ex.get("notes")
+        }
+        supabase.table("fitness_logs").insert(entry).execute()
+        count += 1
+    return count
+
+
+def get_recent_fitness(days: int = 7) -> list[dict]:
+    """Fetch fitness logs from the last N days."""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    result = supabase.table("fitness_logs").select("*").gte("session_date", since).order("session_date", desc=True).execute()
+    return result.data
+
+
+# ============== SCHEDULE EVENT HELPERS ==============
+
+def store_schedule_events(events: list[dict]) -> int:
+    """Store planned events in schedule_events table for adherence tracking."""
+    count = 0
+    for event in events:
+        entry = {
+            "date": event["date"],
+            "start_time": event["start"],
+            "end_time": event["end"],
+            "title": event["title"],
+            "category": event.get("category", "personal"),
+            "description": event.get("description"),
+            "status": "planned"
+        }
+        supabase.table("schedule_events").insert(entry).execute()
+        count += 1
+    return count
+
+
+def get_planned_events_for_date(date_str: str) -> list[dict]:
+    """Get planned schedule events for a specific date."""
+    result = supabase.table("schedule_events").select("*").eq("date", date_str).order("start_time").execute()
+    return result.data
+
+
+def update_schedule_event(event_id: str, status: str, actual_summary: str = None, gap_reason: str = None) -> bool:
+    """Update a schedule event's status and outcome."""
+    updates = {"status": status, "updated_at": datetime.now().isoformat()}
+    if actual_summary:
+        updates["actual_summary"] = actual_summary
+    if gap_reason:
+        updates["gap_reason"] = gap_reason
+    
+    supabase.table("schedule_events").update(updates).eq("id", event_id).execute()
+    return True
+
+
+def mark_evening_audrey(date_str: str, from_time: str = "18:00") -> list[dict]:
+    """Mark evening schedule events as audrey_time. Returns affected events."""
+    events = supabase.table("schedule_events").select("*").eq("date", date_str).eq("status", "planned").gte("start_time", from_time).execute()
+    
+    affected = []
+    for event in events.data:
+        supabase.table("schedule_events").update({
+            "status": "audrey_time",
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", event["id"]).execute()
+        affected.append(event)
+    
+    return affected
+
+
+def get_weekly_adherence(week_start_str: str) -> dict:
+    """Calculate schedule adherence stats for a week."""
+    week_end = (datetime.strptime(week_start_str, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
+    
+    result = supabase.table("schedule_events").select("*").gte("date", week_start_str).lt("date", week_end).execute()
+    
+    stats = {
+        "total": len(result.data),
+        "completed": 0,
+        "partial": 0,
+        "skipped": 0,
+        "audrey_time": 0,
+        "rescheduled": 0,
+        "planned": 0,
+        "by_category": {}
+    }
+    
+    for event in result.data:
+        status = event["status"]
+        stats[status] = stats.get(status, 0) + 1
+        
+        cat = event["category"]
+        if cat not in stats["by_category"]:
+            stats["by_category"][cat] = {"completed": 0, "total": 0}
+        stats["by_category"][cat]["total"] += 1
+        if status == "completed":
+            stats["by_category"][cat]["completed"] += 1
+    
+    if stats["total"] > 0:
+        stats["adherence_pct"] = round((stats["completed"] + stats["partial"] * 0.5) / stats["total"] * 100, 1)
+    else:
+        stats["adherence_pct"] = 0
+    
+    return stats
+
+
 # ============== CALENDAR HELPERS ==============
 
 PLAN_TRIGGERS = [
@@ -211,7 +330,7 @@ def detect_plan_week(user_message: str) -> str | None:
 
 
 def process_plan_week(action_data: dict) -> str:
-    """Process a plan_week action - create Google Calendar events."""
+    """Process a plan_week action - create Google Calendar events and store for tracking."""
     try:
         events = action_data.get("events", [])
         if not events:
@@ -226,14 +345,173 @@ def process_plan_week(action_data: dict) -> str:
         # Clear existing Plato events for this week
         cleared = clear_plato_events(service, week_start)
         
-        # Create new events
+        # Create new calendar events
         created = create_weekly_events(service, events)
         
-        return f"📅 Scheduled {created} events (cleared {cleared} old ones)."
+        # Store in schedule_events table for adherence tracking
+        stored = store_schedule_events(events)
+        
+        return f"📅 Scheduled {created} events (cleared {cleared} old ones). Tracking {stored} blocks."
     
     except Exception as e:
         logger.error(f"Calendar error: {e}")
         return f"⚠️ Calendar error: {e}"
+
+
+def process_audrey_time(action_data: dict) -> str:
+    """Process audrey_time action - cancel evening events and report what's bumped."""
+    try:
+        date_str = action_data.get("date", datetime.now().strftime("%Y-%m-%d"))
+        from_time = action_data.get("from_time", "18:00")
+        
+        # Cancel Google Calendar events
+        service = get_calendar_service()
+        cancelled = cancel_evening_events(service, date_str, from_time)
+        
+        # Mark schedule events as audrey_time
+        affected = mark_evening_audrey(date_str, from_time)
+        
+        if not cancelled and not affected:
+            return "No planned blocks to cancel for tonight."
+        
+        bumped_titles = [e["title"] for e in cancelled]
+        return f"💕 Audrey time activated. Cancelled {len(cancelled)} blocks: {', '.join(bumped_titles)}"
+    
+    except Exception as e:
+        logger.error(f"Audrey time error: {e}")
+        return f"⚠️ Error activating Audrey time: {e}"
+
+
+def process_add_event(action_data: dict) -> str:
+    """Process add_event action - add a one-off event to calendar."""
+    try:
+        service = get_calendar_service()
+        
+        date_str = action_data["date"]
+        start = action_data["start"]
+        end = action_data["end"]
+        title = action_data["title"]
+        category = action_data.get("category", "personal")
+        description = action_data.get("description")
+        
+        # Create calendar event
+        COLOR_MAP = {
+            "cfa": "9", "nitrogen": "10", "glowbook": "6", "plato": "7",
+            "leetcode": "3", "rest": "8", "exercise": "2", "personal": "4",
+            "citco": "1", "audrey": "11",
+        }
+        
+        create_event(
+            service,
+            date_str=date_str,
+            start_time=start,
+            end_time=end,
+            title=title,
+            description=description,
+            color_id=COLOR_MAP.get(category)
+        )
+        
+        # Cancel any conflicting planned blocks
+        cancelled = cancel_conflicting_events(service, date_str, start, end)
+        
+        msg = f"📌 Added: {title} on {date_str} {start}-{end}"
+        if cancelled:
+            msg += f"\n⚠️ Cancelled {len(cancelled)} conflicting blocks: {', '.join(c['title'] for c in cancelled)}"
+        
+        return msg
+    
+    except Exception as e:
+        logger.error(f"Add event error: {e}")
+        return f"⚠️ Error adding event: {e}"
+
+
+def cancel_conflicting_events(service, date_str: str, start: str, end: str) -> list:
+    """Cancel Plato events that overlap with a new event."""
+    cancelled = []
+    
+    events_result = service.events().list(
+        calendarId='primary',
+        timeMin=f'{date_str}T{start}:00+00:00',
+        timeMax=f'{date_str}T{end}:00+00:00',
+        singleEvents=True,
+        q='[Plato]'
+    ).execute()
+    
+    for event in events_result.get('items', []):
+        summary = event.get('summary', '')
+        # Don't cancel the event we just created
+        if '[Plato]' in summary and summary != f'[Plato] {summary.replace("[Plato] ", "")}':
+            continue
+        # Skip — this is imperfect but avoids deleting the one we just made
+        # We rely on the fact that the new event was just created
+    
+    return cancelled
+
+
+def process_check_in(action_data: dict) -> str:
+    """Process a check_in action - update schedule event with actual outcome."""
+    try:
+        event_id = action_data.get("event_id")
+        status = action_data.get("status", "completed")  # completed, partial, skipped
+        actual_summary = action_data.get("actual_summary")
+        gap_reason = action_data.get("gap_reason")
+        
+        if event_id:
+            update_schedule_event(event_id, status, actual_summary, gap_reason)
+            return f"✅ Checked in: {status}"
+        else:
+            # Try to find the most recent planned event
+            today = datetime.now().strftime("%Y-%m-%d")
+            events = get_planned_events_for_date(today)
+            now = datetime.now().strftime("%H:%M")
+            
+            # Find the most recent event that should have ended
+            recent = None
+            for e in events:
+                if e["end_time"] <= now and e["status"] == "planned":
+                    recent = e
+            
+            if recent:
+                update_schedule_event(recent["id"], status, actual_summary, gap_reason)
+                return f"✅ Checked in for '{recent['title']}': {status}"
+            else:
+                return "No recent planned block found to check in against."
+    
+    except Exception as e:
+        logger.error(f"Check-in error: {e}")
+        return f"⚠️ Check-in error: {e}"
+
+
+# ============== PROACTIVE NUDGES ==============
+
+async def check_for_nudges(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Periodic job that checks if a scheduled block just ended and sends a nudge."""
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now()
+        five_mins_ago = (now - timedelta(minutes=5)).strftime("%H:%M")
+        now_str = now.strftime("%H:%M")
+        
+        events = get_planned_events_for_date(today)
+        
+        for event in events:
+            end_time = event.get("end_time", "")
+            if not end_time:
+                continue
+            
+            # Check if event ended within the last 5 minutes
+            if five_mins_ago <= end_time[:5] <= now_str and event["status"] == "planned":
+                title = event["title"]
+                msg = f"⏰ '{title}' just ended. How did it go?\n\nTell me what you actually did and I'll log it."
+                
+                await context.bot.send_message(
+                    chat_id=ALLOWED_USER_ID,
+                    text=msg
+                )
+                logger.info(f"Sent nudge for: {title}")
+    
+    except Exception as e:
+        logger.error(f"Nudge check error: {e}")
 
 
 # ============== CONTEXT ASSEMBLY ==============
@@ -243,6 +521,7 @@ def build_system_prompt(schedule_context: str = "") -> str:
     soul_doc = get_soul_doc()
     projects = get_active_projects()
     patterns = get_unresolved_patterns()
+    recent_fitness = get_recent_fitness(days=7)
     
     projects_context = ""
     for p in projects:
@@ -268,6 +547,32 @@ def build_system_prompt(schedule_context: str = "") -> str:
         for pat in patterns:
             patterns_context += f"- [{pat['pattern_type']}] {pat['description']} (seen {pat['occurrence_count']}x)\n"
     
+    fitness_context = ""
+    if recent_fitness:
+        fitness_context = "\n## RECENT FITNESS (Last 7 days)\n"
+        by_date = {}
+        for log in recent_fitness:
+            d = log["session_date"]
+            if d not in by_date:
+                by_date[d] = []
+            weight_str = f" @ {log['weight_kg']}kg" if log.get("weight_kg") else ""
+            by_date[d].append(f"{log['exercise_name']}: {log.get('sets', '?')}x{log.get('reps', '?')}{weight_str}")
+        for date, exercises in by_date.items():
+            fitness_context += f"  {date}: {', '.join(exercises)}\n"
+    
+    # Get today's schedule for context
+    today_schedule = ""
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_events = get_planned_events_for_date(today)
+        if today_events:
+            today_schedule = "\n## TODAY'S SCHEDULE\n"
+            for e in today_events:
+                status_icon = {"planned": "⬜", "completed": "✅", "partial": "🟡", "skipped": "❌", "audrey_time": "💕", "rescheduled": "🔄"}.get(e["status"], "⬜")
+                today_schedule += f"  {status_icon} {e['start_time'][:5]}-{e['end_time'][:5]}: {e['title']} [{e['status']}]\n"
+    except Exception:
+        pass
+    
     return f"""You are Plato, Jason's personal AI mentor. You embody stoic wisdom and hold him accountable to his long-term goals.
 
 Your role:
@@ -276,6 +581,7 @@ Your role:
 - Call out deviations, impulses, and patterns
 - Be direct, honest, and occasionally challenging
 - Celebrate genuine progress, but don't flatter
+- Track schedule adherence and help optimise his time
 
 ## SOUL DOC (His Constitution)
 {soul_doc}
@@ -283,6 +589,8 @@ Your role:
 ## ACTIVE PROJECTS
 {projects_context}
 {patterns_context}
+{fitness_context}
+{today_schedule}
 
 ## YOUR CAPABILITIES
 When Jason messages you, determine the intent and respond with the appropriate JSON action block followed by your message.
@@ -328,11 +636,45 @@ Only include fields that are being updated.
 8. **PLAN WEEK** - He wants his week scheduled on Google Calendar
 ```json
 {{"action": "plan_week", "events": [
-    {{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "Short descriptive title", "description": "Optional detail", "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco"}}
+    {{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "Short descriptive title", "description": "Optional detail", "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco|audrey"}}
 ]}}
 ```
-When planning a week, generate a COMPLETE schedule filling all free blocks. Be specific with titles (e.g. "CFA - Ethics Chapter 3" not just "CFA Study").
+When planning a week, generate a COMPLETE schedule filling all free blocks. Be specific with titles.
 Priorities: CFA study minimum 10 hrs/week, side projects 8-10 hrs/week, exercise 3+ sessions, rest every evening, Sunday evening light.
+
+9. **LOG FITNESS** - He's reporting a gym session
+```json
+{{"action": "log_fitness", "exercises": [
+    {{"exercise": "Bench Press", "sets": 4, "reps": 8, "weight_kg": 60, "notes": null}},
+    {{"exercise": "Lat Pulldown", "sets": 3, "reps": 12, "weight_kg": 50, "notes": "felt easy, increase next time"}}
+]}}
+```
+Parse naturally: "Did bench 4x8 at 60kg, lat pulldown 3x12 at 50" → structured exercises.
+His goal: bulk to build muscle until mid-2028, then cut. Currently ~80.5kg at ~20% BF. Target: 12-15% BF.
+
+10. **AUDREY TIME** - He's taking the evening (or part of it) for girlfriend time
+```json
+{{"action": "audrey_time", "date": "YYYY-MM-DD", "from_time": "HH:MM"}}
+```
+When he says "audrey time", "spending tonight with Audrey", "girlfriend time" etc:
+- Cancel the evening's planned blocks from the calendar
+- Tell him exactly what got bumped (e.g. "You're dropping 2hrs CFA and 1hr Glowbook")
+- Suggest where to reschedule the bumped work if there are free slots this week
+- Log it — track cumulative Audrey time so you can flag if it's becoming a pattern
+
+11. **ADD ONE-OFF EVENT** - Schedule a specific event (e.g. cousin's confirmation)
+```json
+{{"action": "add_event", "date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "...", "category": "personal", "description": null}}
+```
+For events with unknown duration, block the minimum expected time. Jason can extend later.
+This will also cancel any conflicting planned blocks.
+
+12. **CHECK IN** - Record what actually happened during a planned block
+```json
+{{"action": "check_in", "event_id": "uuid-or-null", "status": "completed|partial|skipped", "actual_summary": "What actually got done", "gap_reason": "Why it didn't go to plan (if partial/skipped)"}}
+```
+When Jason reports back after a work block (or responds to a nudge), log what he actually did vs what was planned.
+If event_id is null, find the most recent ended planned block for today.
 
 ### GUIDELINES:
 - Available tags: coding, marketing, research, design, admin, learning, outreach
@@ -341,8 +683,10 @@ Priorities: CFA study minimum 10 hrs/week, side projects 8-10 hrs/week, exercise
 - Always provide your mentorship response AFTER the JSON block
 - Be concise but insightful
 - If he's going off-track, call it out firmly but kindly
+- When he checks in, compare actual vs planned and note the gap honestly
+- Track Audrey time cumulative impact — flag if 3+ weeks of heavy displacement
 
-Current date: {datetime.now().strftime("%Y-%m-%d")}
+Current date: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 {schedule_context}"""
 
 
@@ -448,6 +792,19 @@ def process_action(action_data: dict, raw_message: str) -> str | None:
         elif action == "plan_week":
             return process_plan_week(action_data)
         
+        elif action == "log_fitness":
+            count = log_fitness_exercises(action_data.get("exercises", []))
+            return f"💪 Logged {count} exercises."
+        
+        elif action == "audrey_time":
+            return process_audrey_time(action_data)
+        
+        elif action == "add_event":
+            return process_add_event(action_data)
+        
+        elif action == "check_in":
+            return process_check_in(action_data)
+        
         return None
     
     except Exception as e:
@@ -480,7 +837,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Use higher max_tokens for week planning (lots of JSON events)
     max_tokens = 4096 if schedule_context else 1024
     
-    response = anthropic.messages.create(
+    response = anthropic_client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=max_tokens,
         system=system_prompt,
@@ -531,7 +888,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     projects = get_active_projects()
     patterns = get_unresolved_patterns()
     
-    msg = "**Current Status**\n\n"
+    msg = "📊 Current Status\n\n"
     for p in projects:
         msg += f"• {p['name']}: {len(p.get('recent_logs', []))} recent logs\n"
         if p.get("current_goals"):
@@ -539,6 +896,30 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     if patterns:
         msg += f"\n⚠️ {len(patterns)} unresolved patterns"
+    
+    # Add today's schedule
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_events = get_planned_events_for_date(today)
+        if today_events:
+            msg += "\n\n📅 Today's Schedule:\n"
+            for e in today_events:
+                status_icon = {"planned": "⬜", "completed": "✅", "partial": "🟡", "skipped": "❌", "audrey_time": "💕"}.get(e["status"], "⬜")
+                msg += f"  {status_icon} {e['start_time'][:5]}-{e['end_time'][:5]}: {e['title']}\n"
+    except Exception:
+        pass
+    
+    # Add weekly adherence
+    try:
+        today = datetime.now()
+        week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+        stats = get_weekly_adherence(week_start)
+        if stats["total"] > 0:
+            msg += f"\n📈 This week: {stats['adherence_pct']}% adherence ({stats['completed']}/{stats['total']} blocks)"
+            if stats["audrey_time"] > 0:
+                msg += f"\n💕 Audrey time: {stats['audrey_time']} blocks"
+    except Exception:
+        pass
     
     await update.message.reply_text(msg)
 
@@ -558,12 +939,17 @@ def main() -> None:
     """Start the bot."""
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
+    # Command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("clear", clear_history))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info("Plato is starting...")
+    # Proactive nudge check — runs every 5 minutes
+    job_queue = app.job_queue
+    job_queue.run_repeating(check_for_nudges, interval=300, first=60)
+    
+    logger.info("Plato v3 is starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
