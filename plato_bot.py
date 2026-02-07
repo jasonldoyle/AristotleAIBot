@@ -25,7 +25,7 @@ def main() -> None:
     job_queue.run_repeating(check_for_nudges, interval=300, first=60)
 
     logger.info("Plato v3 is starting...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":

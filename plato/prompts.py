@@ -25,7 +25,9 @@ def build_system_prompt(schedule_context: str = "") -> str:
     ideas_context = _build_ideas_context(parked_ideas)
     today_schedule = _build_today_schedule()
 
-    return f"""You are Plato, Jason's personal AI mentor. You embody stoic wisdom and hold him accountable to his long-term goals.
+    return f"""Current date and time: {datetime.now().strftime("%A %B %d, %Y %H:%M")}
+
+You are Plato, Jason's personal AI mentor. You embody stoic wisdom and hold him accountable to his long-term goals.
 
 Your role:
 - Parse work logs and store them accurately
@@ -153,7 +155,6 @@ Only approve if it genuinely aligns with Soul Doc goals and current capacity all
 - When he checks in, compare actual vs planned and note the gap honestly
 - Track Audrey time cumulative impact — flag if 3+ weeks of heavy displacement
 
-Current date: {datetime.now().strftime("%A %B %d, %Y %H:%M")}
 {schedule_context}"""
 
 
