@@ -6,7 +6,7 @@ Personal AI mentor for Jason. Built with stoic wisdom and accountability.
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from plato.config import TELEGRAM_TOKEN, logger
-from plato.handlers import handle_message, start, status, clear_history
+from plato.handlers import handle_message, handle_document, start, status, clear_history
 from plato.nudges import check_for_nudges
 
 
@@ -19,6 +19,7 @@ def main() -> None:
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("clear", clear_history))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
     # Proactive nudge check — runs every 5 minutes
     job_queue = app.job_queue

@@ -13,7 +13,7 @@ from plato.db import (
     get_weekly_adherence, get_pending_plan
 )
 from plato.prompts import build_system_prompt, build_messages_with_history
-from plato.actions import process_action, process_approve_plan
+from plato.actions import process_action, process_approve_plan, process_import_csv
 from plato_calendar import get_schedule_prompt
 
 
@@ -180,3 +180,43 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     clear_conversations()
     await update.message.reply_text("Conversation history cleared. Fresh start.")
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle uploaded documents (CSV files for finance import)."""
+    if update.effective_user.id != ALLOWED_USER_ID:
+        return
+
+    document = update.message.document
+    filename = document.file_name.lower()
+
+    if not filename.endswith(".csv"):
+        await update.message.reply_text("I only accept CSV files for now. Export your statement as CSV from Revolut or AIB.")
+        return
+
+    # Download file
+    file = await document.get_file()
+    file_bytes = await file.download_as_bytearray()
+    csv_content = file_bytes.decode("utf-8")
+
+    # Detect source from filename or content
+    if "account-statement" in filename or "revolut" in filename:
+        source = "revolut"
+    elif "transaction_export" in filename or "aib" in filename:
+        source = "aib"
+    elif "Posted Account" in csv_content[:200]:
+        source = "aib"
+    elif "Started Date" in csv_content[:200]:
+        source = "revolut"
+    else:
+        await update.message.reply_text("Couldn't detect if this is Revolut or AIB. Please rename the file to include 'revolut' or 'aib' in the filename.")
+        return
+
+    await update.message.reply_text(f"📄 Processing {source.upper()} CSV...")
+
+    result = process_import_csv(csv_content, source)
+
+    save_conversation("user", f"[Uploaded {source} CSV: {document.file_name}]")
+    save_conversation("assistant", result)
+
+    await update.message.reply_text(result)

@@ -12,6 +12,12 @@ from plato.db.schedule import (
     store_pending_plan, get_pending_plan, clear_pending_plan
 )
 from plato.db.ideas import park_idea, get_parked_ideas, resolve_idea
+from plato.db.finance import (
+    parse_revolut_csv, parse_aib_csv, import_transactions,
+    get_transactions_for_month, get_spending_by_category,
+    get_monthly_summary, get_budget_limits, set_budget_limit,
+    check_budget_alerts, update_transaction_category
+)
 
 __all__ = [
     "get_recent_conversations", "save_conversation", "clear_conversations",
@@ -24,4 +30,8 @@ __all__ = [
     "update_schedule_event", "mark_evening_audrey", "get_weekly_adherence",
     "store_pending_plan", "get_pending_plan", "clear_pending_plan",
     "park_idea", "get_parked_ideas", "resolve_idea",
+    "parse_revolut_csv", "parse_aib_csv", "import_transactions",
+    "get_transactions_for_month", "get_spending_by_category",
+    "get_monthly_summary", "get_budget_limits", "set_budget_limit",
+    "check_budget_alerts", "update_transaction_category",
 ]

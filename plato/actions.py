@@ -10,7 +10,9 @@ from plato.db import (
     add_project_goal, mark_goal_achieved, update_project, add_pattern,
     log_fitness_exercises, store_pending_plan, get_pending_plan,
     clear_pending_plan, store_schedule_events, update_schedule_event,
-    get_planned_events_for_date, mark_evening_audrey, park_idea, resolve_idea
+    get_planned_events_for_date, mark_evening_audrey, park_idea, resolve_idea,
+    parse_revolut_csv, parse_aib_csv, import_transactions,
+    get_monthly_summary, check_budget_alerts, set_budget_limit
 )
 from plato_calendar import (
     get_calendar_service, clear_plato_events, create_weekly_events,
@@ -72,6 +74,12 @@ def process_action(action_data: dict, raw_message: str) -> str | None:
                 return f"{'✅' if action_data['status'] == 'approved' else '❌'} Idea resolved: {action_data['status']}"
             else:
                 return f"⚠️ Couldn't find parked idea matching '{action_data['idea_fragment']}'"
+
+        elif action == "finance_review":
+            return process_finance_review(action_data)
+
+        elif action == "set_budget":
+            return process_set_budget(action_data)
 
         return None
 
@@ -310,3 +318,92 @@ def process_check_in(action_data: dict) -> str:
     except Exception as e:
         logger.error(f"Check-in error: {e}")
         return f"⚠️ Check-in error: {e}"
+
+
+# ============== FINANCE ACTIONS ==============
+
+def process_import_csv(csv_content: str, source: str) -> str:
+    """Parse and import a CSV file from Revolut or AIB."""
+    try:
+        if source == "revolut":
+            transactions = parse_revolut_csv(csv_content)
+        elif source == "aib":
+            transactions = parse_aib_csv(csv_content)
+        else:
+            return f"⚠️ Unknown source: {source}"
+
+        if not transactions:
+            return "⚠️ No transactions found in the CSV."
+
+        stats = import_transactions(transactions)
+
+        income = sum(t["amount"] for t in transactions if t["amount"] > 0 and not t["is_transfer"])
+        spending = sum(abs(t["amount"]) for t in transactions if t["amount"] < 0 and not t["is_transfer"])
+
+        msg = f"💰 Imported {stats['imported']} transactions from {source.upper()}"
+        if stats["skipped"] > 0:
+            msg += f" ({stats['skipped']} duplicates skipped)"
+        msg += f"\n📊 Income: €{income:,.2f} | Spending: €{spending:,.2f}"
+
+        # Check budget alerts
+        from datetime import datetime as dt
+        now = dt.now()
+        alerts = check_budget_alerts(now.year, now.month)
+        if alerts:
+            msg += "\n\n🚨 Budget alerts:"
+            for a in alerts:
+                icon = "🔴" if a["status"] == "over" else "🟡"
+                msg += f"\n  {icon} {a['category']}: €{a['spent']:.2f} / €{a['limit']:.2f} ({a['pct']}%)"
+
+        return msg
+
+    except Exception as e:
+        logger.error(f"CSV import error: {e}")
+        return f"⚠️ Error importing CSV: {e}"
+
+
+def process_finance_review(action_data: dict) -> str:
+    """Generate a finance summary for a given month."""
+    try:
+        year = action_data.get("year", datetime.now().year)
+        month = action_data.get("month", datetime.now().month)
+
+        summary = get_monthly_summary(year, month)
+
+        msg = f"💰 FINANCE REVIEW — {summary['month']}\n\n"
+        msg += f"Income: €{summary['total_income']:,.2f}\n"
+        msg += f"Spending: €{summary['total_spending']:,.2f}\n"
+        msg += f"Net: €{summary['net']:,.2f}\n"
+        msg += f"Savings rate: {summary['savings_rate']}%\n"
+        msg += f"Transactions: {summary['transaction_count']}\n\n"
+
+        if summary["by_category"]:
+            msg += "Spending by category:\n"
+            for cat, amount in summary["by_category"].items():
+                msg += f"  • {cat}: €{amount:,.2f}\n"
+
+        # Check budget alerts
+        alerts = check_budget_alerts(year, month)
+        if alerts:
+            msg += "\n🚨 Budget alerts:\n"
+            for a in alerts:
+                icon = "🔴" if a["status"] == "over" else "🟡"
+                msg += f"  {icon} {a['category']}: €{a['spent']:.2f} / €{a['limit']:.2f} ({a['pct']}%)\n"
+
+        return msg
+
+    except Exception as e:
+        logger.error(f"Finance review error: {e}")
+        return f"⚠️ Error generating finance review: {e}"
+
+
+def process_set_budget(action_data: dict) -> str:
+    """Set a budget limit for a category."""
+    try:
+        category = action_data["category"]
+        limit = float(action_data["monthly_limit"])
+        set_budget_limit(category, limit)
+        return f"💰 Budget set: {category} → €{limit:,.2f}/month"
+    except Exception as e:
+        logger.error(f"Set budget error: {e}")
+        return f"⚠️ Error setting budget: {e}"

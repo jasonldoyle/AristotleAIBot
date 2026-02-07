@@ -7,7 +7,8 @@ from datetime import datetime
 from plato.db import (
     get_soul_doc, get_active_projects, get_unresolved_patterns,
     get_recent_fitness, get_parked_ideas, get_planned_events_for_date,
-    get_recent_conversations
+    get_recent_conversations, get_budget_limits, check_budget_alerts,
+    get_monthly_summary
 )
 
 
@@ -24,6 +25,7 @@ def build_system_prompt(schedule_context: str = "") -> str:
     fitness_context = _build_fitness_context(recent_fitness)
     ideas_context = _build_ideas_context(parked_ideas)
     today_schedule = _build_today_schedule()
+    finance_context = _build_finance_context()
 
     return f"""Current date and time: {datetime.now().strftime("%A %B %d, %Y %H:%M")}
 
@@ -46,6 +48,7 @@ Your role:
 {fitness_context}
 {ideas_context}
 {today_schedule}
+{finance_context}
 
 ## YOUR CAPABILITIES
 When Jason messages you, determine the intent and respond with the appropriate JSON action block followed by your message.
@@ -144,6 +147,25 @@ If an idea in the parking lot has passed its 2-week eligible date, mention it an
 {{"action": "resolve_idea", "idea_fragment": "partial match text", "status": "approved|rejected", "notes": "Why"}}
 ```
 Only approve if it genuinely aligns with Soul Doc goals and current capacity allows it.
+
+15. **FINANCE REVIEW** - He wants a spending/savings summary
+```json
+{{"action": "finance_review", "year": 2026, "month": 2}}
+```
+When he asks about his finances, spending, savings rate, or budget — generate a review for the requested month.
+If no month specified, use the current month.
+
+16. **SET BUDGET** - He wants to set a monthly spending limit for a category
+```json
+{{"action": "set_budget", "category": "takeaway", "monthly_limit": 100.00}}
+```
+Available categories: groceries, takeaway, coffee_eating_out, transport, fuel, rent, utilities, dev_tools, subscriptions, fitness, health, clothing, shopping, fees, other.
+
+### FINANCE NOTES:
+- Jason uploads Revolut and AIB CSVs monthly — these are parsed and stored automatically
+- Transactions are auto-categorised but he can ask to re-categorise edge cases
+- His dynasty goal requires aggressive saving — challenge him if spending is loose
+- Track savings rate month-over-month and call out trends
 
 ### GUIDELINES:
 - Available tags: coding, marketing, research, design, admin, learning, outreach
@@ -247,6 +269,34 @@ def _build_today_schedule() -> str:
         for e in today_events:
             icon = status_icons.get(e["status"], "⬜")
             context += f"  {icon} {e['start_time'][:5]}-{e['end_time'][:5]}: {e['title']} [{e['status']}]\n"
+        return context
+    except Exception:
+        return ""
+
+
+def _build_finance_context() -> str:
+    """Build current month finance snapshot for system prompt."""
+    try:
+        now = datetime.now()
+        summary = get_monthly_summary(now.year, now.month)
+
+        if summary["transaction_count"] == 0:
+            return ""
+
+        context = f"\n## FINANCE — {summary['month']}\n"
+        context += f"  Income: €{summary['total_income']:,.2f} | Spending: €{summary['total_spending']:,.2f}\n"
+        context += f"  Net: €{summary['net']:,.2f} | Savings rate: {summary['savings_rate']}%\n"
+
+        if summary["by_category"]:
+            top_3 = list(summary["by_category"].items())[:3]
+            context += f"  Top spend: {', '.join(f'{cat} €{amt:,.2f}' for cat, amt in top_3)}\n"
+
+        alerts = check_budget_alerts(now.year, now.month)
+        if alerts:
+            for a in alerts:
+                icon = "🔴" if a["status"] == "over" else "🟡"
+                context += f"  {icon} {a['category']}: €{a['spent']:.2f}/€{a['limit']:.2f}\n"
+
         return context
     except Exception:
         return ""
