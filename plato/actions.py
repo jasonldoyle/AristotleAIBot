@@ -23,6 +23,12 @@ from plato.db import (
     calculate_block_dates, get_phase_for_month, get_nutrition_for_phase, plan_next_block,
     get_todays_workout, format_todays_workout, complete_workout,
     update_template_weight, adjust_exercise_weight,
+    # Admin
+    add_task, complete_task, skip_task, delete_task,
+    add_recurring_task, complete_recurring, delete_recurring,
+    add_important_date, delete_important_date,
+    get_pending_tasks, get_upcoming_tasks, get_upcoming_dates,
+    get_tasks_for_date, DAY_LOOKUP,
 )
 from plato_calendar import (
     get_calendar_service, clear_plato_events, create_weekly_events,
@@ -120,6 +126,28 @@ def process_action(action_data: dict, raw_message: str) -> str | None:
             return process_achieve_fitness_goal(action_data)
         elif action == "revise_fitness_goal":
             return process_revise_fitness_goal(action_data)
+
+        # ===== ADMIN ACTIONS =====
+        elif action == "add_task":
+            return process_add_task(action_data)
+        elif action == "complete_task":
+            return process_complete_task(action_data)
+        elif action == "skip_task":
+            return process_skip_task(action_data)
+        elif action == "delete_task":
+            return process_delete_task(action_data)
+        elif action == "add_recurring":
+            return process_add_recurring(action_data)
+        elif action == "complete_recurring":
+            return process_complete_recurring(action_data)
+        elif action == "delete_recurring":
+            return process_delete_recurring(action_data)
+        elif action == "add_date":
+            return process_add_date(action_data)
+        elif action == "delete_date":
+            return process_delete_date(action_data)
+        elif action == "show_tasks":
+            return process_show_tasks(action_data)
 
         return None
 
@@ -965,4 +993,233 @@ def process_revise_fitness_goal(action_data: dict) -> str:
         return f"⚠️ No active goal matching '{action_data['goal_fragment']}'"
     except Exception as e:
         logger.error(f"Revise fitness goal error: {e}")
+        return f"⚠️ Error: {e}"
+
+
+# ============== ADMIN TASK ACTIONS ==============
+
+def process_add_task(action_data: dict) -> str:
+    """Add a one-off task."""
+    try:
+        task = add_task(
+            title=action_data["title"],
+            due_date=action_data.get("due_date"),
+            due_time=action_data.get("due_time"),
+            category=action_data.get("category", "personal"),
+            priority=action_data.get("priority", "normal"),
+            notes=action_data.get("notes"),
+        )
+        msg = f"📌 Task added: {task['title']}"
+        if task.get("due_date"):
+            msg += f" (due {task['due_date']})"
+        if task.get("priority") and task["priority"] != "normal":
+            msg += f" [{task['priority'].upper()}]"
+        return msg
+    except Exception as e:
+        logger.error(f"Add task error: {e}")
+        return f"⚠️ Error adding task: {e}"
+
+
+def process_complete_task(action_data: dict) -> str:
+    """Mark a task as done."""
+    try:
+        fragment = action_data["task_fragment"]
+        success = complete_task(fragment)
+        if success:
+            return f"✅ Done: {fragment}"
+        return f"⚠️ No pending task matching '{fragment}'"
+    except Exception as e:
+        logger.error(f"Complete task error: {e}")
+        return f"⚠️ Error: {e}"
+
+
+def process_skip_task(action_data: dict) -> str:
+    """Skip a task."""
+    try:
+        fragment = action_data["task_fragment"]
+        reason = action_data.get("reason")
+        success = skip_task(fragment, reason)
+        if success:
+            return f"⏭️ Skipped: {fragment}"
+        return f"⚠️ No pending task matching '{fragment}'"
+    except Exception as e:
+        logger.error(f"Skip task error: {e}")
+        return f"⚠️ Error: {e}"
+
+
+def process_delete_task(action_data: dict) -> str:
+    """Delete a task."""
+    try:
+        fragment = action_data["task_fragment"]
+        success = delete_task(fragment)
+        if success:
+            return f"🗑️ Deleted: {fragment}"
+        return f"⚠️ No task matching '{fragment}'"
+    except Exception as e:
+        logger.error(f"Delete task error: {e}")
+        return f"⚠️ Error: {e}"
+
+
+def process_add_recurring(action_data: dict) -> str:
+    """Add a recurring task."""
+    try:
+        recurring = action_data["recurring"]  # weekly, monthly, yearly
+        recurring_day = action_data.get("recurring_day")
+
+        # Parse day name to number if needed
+        if isinstance(recurring_day, str):
+            recurring_day = DAY_LOOKUP.get(recurring_day.lower(), recurring_day)
+
+        task = add_recurring_task(
+            title=action_data["title"],
+            recurring=recurring,
+            recurring_day=recurring_day,
+            recurring_month=action_data.get("recurring_month"),
+            category=action_data.get("category", "personal"),
+            priority=action_data.get("priority", "normal"),
+            notes=action_data.get("notes"),
+        )
+
+        freq_str = recurring
+        if recurring == "weekly" and recurring_day is not None:
+            from plato.db.admin import DAY_NAMES
+            freq_str = f"every {DAY_NAMES.get(recurring_day, recurring_day)}"
+        elif recurring == "monthly" and recurring_day:
+            freq_str = f"monthly on the {recurring_day}th"
+
+        msg = f"🔁 Recurring task added: {task['title']} ({freq_str})"
+        return msg
+    except Exception as e:
+        logger.error(f"Add recurring error: {e}")
+        return f"⚠️ Error adding recurring task: {e}"
+
+
+def process_complete_recurring(action_data: dict) -> str:
+    """Mark a recurring task as done for this occurrence."""
+    try:
+        fragment = action_data["task_fragment"]
+        success = complete_recurring(fragment)
+        if success:
+            return f"✅ Done (this week): {fragment}"
+        return f"⚠️ No recurring task matching '{fragment}'"
+    except Exception as e:
+        logger.error(f"Complete recurring error: {e}")
+        return f"⚠️ Error: {e}"
+
+
+def process_delete_recurring(action_data: dict) -> str:
+    """Delete a recurring task permanently."""
+    try:
+        fragment = action_data["task_fragment"]
+        success = delete_recurring(fragment)
+        if success:
+            return f"🗑️ Recurring task removed: {fragment}"
+        return f"⚠️ No recurring task matching '{fragment}'"
+    except Exception as e:
+        logger.error(f"Delete recurring error: {e}")
+        return f"⚠️ Error: {e}"
+
+
+def process_add_date(action_data: dict) -> str:
+    """Add an important date."""
+    try:
+        entry = add_important_date(
+            title=action_data["title"],
+            date_month=action_data["month"],
+            date_day=action_data["day"],
+            year=action_data.get("year"),
+            category=action_data.get("category", "birthday"),
+            reminder_days=action_data.get("reminder_days", 7),
+            notes=action_data.get("notes"),
+        )
+        msg = f"📅 Date saved: {entry['title']} ({entry['date_day']}/{entry['date_month']}"
+        if entry.get("year"):
+            msg += f"/{entry['year']}"
+        msg += ")"
+        if entry.get("reminder_days"):
+            msg += f" — {entry['reminder_days']}d reminder"
+        return msg
+    except Exception as e:
+        logger.error(f"Add date error: {e}")
+        return f"⚠️ Error adding date: {e}"
+
+
+def process_delete_date(action_data: dict) -> str:
+    """Delete an important date."""
+    try:
+        fragment = action_data["title_fragment"]
+        success = delete_important_date(fragment)
+        if success:
+            return f"🗑️ Date removed: {fragment}"
+        return f"⚠️ No date matching '{fragment}'"
+    except Exception as e:
+        logger.error(f"Delete date error: {e}")
+        return f"⚠️ Error: {e}"
+
+
+def process_show_tasks(action_data: dict) -> str:
+    """Show tasks — today's, upcoming, or all."""
+    try:
+        scope = action_data.get("scope", "today")
+
+        if scope == "today":
+            tasks = get_tasks_for_date()
+            if not tasks:
+                return "📋 No tasks for today."
+            msg = "📋 Today's tasks:\n"
+            for t in tasks:
+                icon = "🔴" if t.get("_overdue") else "🔁" if t.get("_recurring_due") else "📌"
+                priority = f" [{t['priority'].upper()}]" if t.get("priority") not in ("normal", None) else ""
+                overdue = " ⚠️ OVERDUE" if t.get("_overdue") else ""
+                msg += f"  {icon} {t['title']}{priority}{overdue}\n"
+            return msg
+
+        elif scope == "upcoming":
+            days = action_data.get("days", 7)
+            tasks = get_upcoming_tasks(days)
+            dates = get_upcoming_dates(days)
+
+            if not tasks and not dates:
+                return f"📋 Nothing coming up in the next {days} days."
+
+            msg = f"📋 Next {days} days:\n"
+            if tasks:
+                for t in tasks:
+                    msg += f"  📌 {t['due_date']}: {t['title']}\n"
+            if dates:
+                msg += "\n🎂 Dates:\n"
+                for d in dates:
+                    age_str = f" (turning {d['_age']})" if d.get("_age") else ""
+                    msg += f"  📅 {d['_next_date']}: {d['title']}{age_str} — {d['_days_until']} days\n"
+            return msg
+
+        elif scope == "all":
+            pending = get_pending_tasks()
+            from plato.db.admin import get_recurring_tasks as get_rec
+            recurring = get_rec()
+
+            msg = "📋 ALL TASKS:\n"
+            if pending:
+                msg += "\nOne-off:\n"
+                for t in pending:
+                    due = f" (due {t['due_date']})" if t.get("due_date") else ""
+                    msg += f"  📌 {t['title']}{due}\n"
+            if recurring:
+                msg += "\nRecurring:\n"
+                for t in recurring:
+                    from plato.db.admin import DAY_NAMES
+                    if t["recurring"] == "weekly":
+                        day = DAY_NAMES.get(t.get("recurring_day"), "?")
+                        msg += f"  🔁 {t['title']} (every {day})\n"
+                    else:
+                        msg += f"  🔁 {t['title']} ({t['recurring']})\n"
+
+            if not pending and not recurring:
+                msg = "📋 No tasks."
+            return msg
+
+        return "⚠️ Unknown scope. Use 'today', 'upcoming', or 'all'."
+
+    except Exception as e:
+        logger.error(f"Show tasks error: {e}")
         return f"⚠️ Error: {e}"

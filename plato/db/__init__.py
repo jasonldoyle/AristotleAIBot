@@ -47,6 +47,14 @@ from plato.db.finance import (
     get_monthly_summary, get_budget_limits, set_budget_limit,
     check_budget_alerts, update_transaction_category
 )
+from plato.db.admin import (
+    add_task, complete_task, skip_task, delete_task,
+    add_recurring_task, complete_recurring, delete_recurring,
+    add_important_date, delete_important_date, get_all_important_dates,
+    get_pending_tasks, get_recurring_tasks, get_tasks_for_date,
+    get_overdue_tasks, get_upcoming_tasks, get_upcoming_dates,
+    mark_overdue_tasks, DAY_LOOKUP,
+)
 
 __all__ = [
     "get_recent_conversations", "save_conversation", "clear_conversations",
@@ -79,4 +87,11 @@ __all__ = [
     "get_transactions_for_month", "get_spending_by_category",
     "get_monthly_summary", "get_budget_limits", "set_budget_limit",
     "check_budget_alerts", "update_transaction_category",
+    # Admin
+    "add_task", "complete_task", "skip_task", "delete_task",
+    "add_recurring_task", "complete_recurring", "delete_recurring",
+    "add_important_date", "delete_important_date", "get_all_important_dates",
+    "get_pending_tasks", "get_recurring_tasks", "get_tasks_for_date",
+    "get_overdue_tasks", "get_upcoming_tasks", "get_upcoming_dates",
+    "mark_overdue_tasks", "DAY_LOOKUP",
 ]

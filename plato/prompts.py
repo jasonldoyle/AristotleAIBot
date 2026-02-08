@@ -13,6 +13,9 @@ from plato.db import (
     get_current_block, get_all_lift_latest, get_recent_nutrition,
     get_weight_history, get_recent_training, MAIN_LIFTS,
     get_fitness_goals, get_phase_for_month,
+    # Admin
+    get_tasks_for_date, get_upcoming_tasks, get_upcoming_dates,
+    get_overdue_tasks, get_recurring_tasks,
 )
 
 
@@ -29,6 +32,7 @@ def build_system_prompt(schedule_context: str = "") -> str:
     today_schedule = _build_today_schedule()
     finance_context = _build_finance_context()
     fitness_context = _build_fitness_context()
+    admin_context = _build_admin_context()
 
     return f"""Current date and time: {datetime.now().strftime("%A %B %d, %Y %H:%M")}
 
@@ -54,6 +58,7 @@ Your role:
 {today_schedule}
 {finance_context}
 {fitness_context}
+{admin_context}
 
 ## YOUR CAPABILITIES
 When Jason messages you, determine the intent and respond with the appropriate JSON action block followed by your message.
@@ -255,6 +260,66 @@ Categories: body_composition (weight/bf targets), strength (lift targets), aesth
 ```json
 {{"action": "revise_fitness_goal", "goal_fragment": "88-89kg", "new_text": "Reach 90kg at 12% body fat", "new_target": "90kg @ 12% BF"}}
 ```
+
+### ADMIN TASK ACTIONS:
+
+27. **ADD TASK** - One-off task with optional due date
+```json
+{{"action": "add_task", "title": "Buy mam's birthday gift", "due_date": "2026-02-14", "due_time": null, "category": "shopping", "priority": "high", "notes": null}}
+```
+Categories: personal, shopping, health, admin, social. Priorities: low, normal, high, urgent.
+Parse naturally: "I need to buy boots skincare products on Monday" → add_task with due_date = next Monday.
+
+28. **COMPLETE TASK** - Mark a task as done
+```json
+{{"action": "complete_task", "task_fragment": "boots skincare"}}
+```
+
+29. **SKIP TASK** - Skip a task
+```json
+{{"action": "skip_task", "task_fragment": "boots skincare", "reason": "shop was closed"}}
+```
+
+30. **DELETE TASK** - Remove a task entirely
+```json
+{{"action": "delete_task", "task_fragment": "boots skincare"}}
+```
+
+31. **ADD RECURRING** - Task that repeats weekly/monthly
+```json
+{{"action": "add_recurring", "title": "Laundry", "recurring": "weekly", "recurring_day": "thursday", "category": "personal"}}
+```
+recurring_day: day name for weekly (monday-sunday), day number for monthly (1-31).
+Parse naturally: "Laundry every Thursday" → add_recurring with weekly + thursday.
+"Pay rent on the 1st" → add_recurring with monthly + 1.
+
+32. **COMPLETE RECURRING** - Mark this week's/month's occurrence as done
+```json
+{{"action": "complete_recurring", "task_fragment": "laundry"}}
+```
+
+33. **DELETE RECURRING** - Remove a recurring task permanently
+```json
+{{"action": "delete_recurring", "task_fragment": "laundry"}}
+```
+
+34. **ADD IMPORTANT DATE** - Birthday, anniversary, deadline
+```json
+{{"action": "add_date", "title": "Mam's birthday", "month": 3, "day": 15, "year": 1970, "category": "birthday", "reminder_days": 7, "notes": null}}
+```
+Categories: birthday, anniversary, deadline, other.
+Year is optional (for age calculation). reminder_days = how many days before to start reminding.
+
+35. **DELETE DATE** - Remove an important date
+```json
+{{"action": "delete_date", "title_fragment": "Mam's birthday"}}
+```
+
+36. **SHOW TASKS** - Display tasks
+```json
+{{"action": "show_tasks", "scope": "today|upcoming|all", "days": 7}}
+```
+"What do I need to do today?" → scope: today. "What's coming up?" → scope: upcoming. "Show all tasks" → scope: all.
 
 ### TRAINING PLAN CONTEXT:
 Jason's 4-day split (Mon/Tue/Thu/Sat):
@@ -540,3 +605,78 @@ def _build_fitness_context() -> str:
 
     except Exception as e:
         return f"\n## FITNESS STATUS\n  ⚠️ Error loading fitness data: {e}\n"
+
+
+def _build_admin_context() -> str:
+    """Build admin task context — today's tasks, overdue, upcoming dates."""
+    try:
+        context = ""
+        has_data = False
+
+        # Today's tasks
+        today_tasks = get_tasks_for_date()
+        if today_tasks:
+            has_data = True
+            context += "\n## TODAY'S TASKS\n"
+            for t in today_tasks:
+                icon = "🔴" if t.get("_overdue") else "🔁" if t.get("_recurring_due") else "📌"
+                priority = f" [{t['priority'].upper()}]" if t.get("priority") not in ("normal", None) else ""
+                overdue = " ⚠️ OVERDUE" if t.get("_overdue") else ""
+                context += f"  {icon} {t['title']}{priority}{overdue}\n"
+
+        # Overdue tasks (not just today)
+        overdue = get_overdue_tasks()
+        if overdue:
+            has_data = True
+            if not any(t.get("_overdue") for t in today_tasks):
+                context += "\n## ⚠️ OVERDUE TASKS\n"
+                for t in overdue:
+                    context += f"  🔴 {t['title']} (due {t['due_date']})\n"
+
+        # Upcoming in next 7 days
+        upcoming = get_upcoming_tasks(7)
+        # Filter out today's (already shown)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        upcoming = [t for t in upcoming if t.get("due_date") != today_str]
+        if upcoming:
+            has_data = True
+            context += "\n## UPCOMING TASKS (7 days)\n"
+            for t in upcoming:
+                context += f"  📌 {t['due_date']}: {t['title']}\n"
+
+        # Upcoming important dates (30 days)
+        dates = get_upcoming_dates(30)
+        if dates:
+            has_data = True
+            context += "\n## UPCOMING DATES\n"
+            for d in dates:
+                age_str = f" (turning {d['_age']})" if d.get("_age") else ""
+                if d["_days_until"] == 0:
+                    context += f"  🎂 TODAY: {d['title']}{age_str}\n"
+                elif d["_days_until"] <= d.get("reminder_days", 7):
+                    context += f"  🎂 {d['_next_date']}: {d['title']}{age_str} — {d['_days_until']} days!\n"
+                else:
+                    context += f"  📅 {d['_next_date']}: {d['title']}{age_str} — {d['_days_until']} days\n"
+
+        # Recurring tasks summary (always show so Plato knows the schedule)
+        recurring = get_recurring_tasks()
+        if recurring:
+            has_data = True
+            from plato.db.admin import DAY_NAMES
+            context += "\n## RECURRING TASKS\n"
+            for t in recurring:
+                if t["recurring"] == "weekly":
+                    day = DAY_NAMES.get(t.get("recurring_day"), "?")
+                    context += f"  🔁 {t['title']} (every {day})\n"
+                elif t["recurring"] == "monthly":
+                    context += f"  🔁 {t['title']} (monthly, {t.get('recurring_day')}th)\n"
+                else:
+                    context += f"  🔁 {t['title']} ({t['recurring']})\n"
+
+        if not has_data:
+            return ""
+
+        return context
+
+    except Exception as e:
+        return f"\n## ADMIN TASKS\n  ⚠️ Error loading tasks: {e}\n"
