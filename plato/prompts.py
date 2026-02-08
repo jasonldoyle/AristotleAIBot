@@ -12,6 +12,7 @@ from plato.db import (
     # Fitness
     get_current_block, get_all_lift_latest, get_recent_nutrition,
     get_weight_history, get_recent_training, MAIN_LIFTS,
+    get_fitness_goals,
 )
 
 
@@ -187,7 +188,7 @@ Covers: training, weight, nutrition, main lifts, cycling, skincare, health.
 Generate at the end of each training block (every 4 weeks). Compares start vs end for weight, strength, nutrition.
 Remind Jason to take progress photos.
 
-22. **CREATE TRAINING BLOCK** - Start a new 4-week cycle
+22. **CREATE TRAINING BLOCK** - Start a new 4-week cycle (auto-generates all workouts + calendar)
 ```json
 {{"action": "create_block", "name": "March 2026", "start_date": "2026-03-02", "end_date": "2026-03-29",
   "phase": "bulk", "calorie_target": 3000, "protein_target": 170,
@@ -195,10 +196,29 @@ Remind Jason to take progress photos.
   "cycling_days": ["Mon", "Wed", "Fri"], "notes": null}}
 ```
 Phase options: bulk, mini_cut, final_cut
+This automatically generates all 16 training sessions (4/week) with exercises from workout templates and pushes them to Google Calendar.
 
 23. **PROGRESS PHOTOS** - Log that photos were taken
 ```json
 {{"action": "progress_photos", "date": null, "notes": "Front, side, back"}}
+```
+
+24. **ADD FITNESS GOAL** - Persistent fitness target (like soul doc for body)
+```json
+{{"action": "add_fitness_goal", "category": "body_composition|strength|aesthetic|habit|timeline",
+  "goal_text": "Reach 88-89kg at 12-13% body fat", "target_value": "88-89kg @ 12-13% BF",
+  "target_date": "2028-06-30", "notes": null}}
+```
+Categories: body_composition (weight/bf targets), strength (lift targets), aesthetic (muscle group priorities), habit (daily routines), timeline (phase milestones).
+
+25. **ACHIEVE FITNESS GOAL** - Mark a goal as achieved
+```json
+{{"action": "achieve_fitness_goal", "goal_fragment": "88-89kg"}}
+```
+
+26. **REVISE FITNESS GOAL** - Update a goal
+```json
+{{"action": "revise_fitness_goal", "goal_fragment": "88-89kg", "new_text": "Reach 90kg at 12% body fat", "new_target": "90kg @ 12% BF"}}
 ```
 
 ### TRAINING PLAN CONTEXT:
@@ -232,6 +252,12 @@ Track exceptions only — if he doesn't mention skincare, assume done.
 - Jason uploads Revolut and AIB CSVs monthly — these are parsed and stored automatically
 - He can also paste MFP printable diary text — this gets parsed into daily nutrition logs
 - His dynasty goal requires aggressive saving — challenge him if spending is loose
+
+### FITNESS GOALS:
+Fitness goals are Jason's persistent body/training targets — reference them like you would the Soul Doc.
+When he mentions a new fitness target, store it. When he hits one, celebrate and mark achieved.
+Key goals to track: body composition targets, main lift milestones, aesthetic priorities, habit streaks, phase timeline milestones.
+Always tie weekly/block reviews back to these goals.
 
 ### GUIDELINES:
 - Available tags: coding, marketing, research, design, admin, learning, outreach
@@ -357,6 +383,27 @@ def _build_fitness_context() -> str:
     try:
         context = "\n## FITNESS STATUS\n"
         has_data = False
+
+        # Fitness goals
+        goals = get_fitness_goals("active")
+        if goals:
+            has_data = True
+            context += "\n### Fitness Goals:\n"
+            by_cat = {}
+            for g in goals:
+                cat = g["category"]
+                if cat not in by_cat:
+                    by_cat[cat] = []
+                by_cat[cat].append(g)
+            for cat, items in by_cat.items():
+                context += f"  {cat.upper()}:\n"
+                for g in items:
+                    context += f"    🎯 {g['goal_text']}"
+                    if g.get("target_value"):
+                        context += f" → {g['target_value']}"
+                    if g.get("target_date"):
+                        context += f" (by {g['target_date']})"
+                    context += "\n"
 
         # Current training block
         block = get_current_block()

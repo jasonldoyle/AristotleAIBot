@@ -18,6 +18,8 @@ from plato.db import (
     confirm_progression, parse_mfp_diary, import_nutrition,
     create_training_block, generate_weekly_summary, generate_block_summary,
     log_progress_photos, get_all_lift_latest, MAIN_LIFTS,
+    add_fitness_goal, get_fitness_goals, achieve_fitness_goal,
+    revise_fitness_goal, generate_block_workouts,
 )
 from plato_calendar import (
     get_calendar_service, clear_plato_events, create_weekly_events,
@@ -101,6 +103,12 @@ def process_action(action_data: dict, raw_message: str) -> str | None:
             return process_create_block(action_data)
         elif action == "progress_photos":
             return process_progress_photos(action_data)
+        elif action == "add_fitness_goal":
+            return process_add_fitness_goal(action_data)
+        elif action == "achieve_fitness_goal":
+            return process_achieve_fitness_goal(action_data)
+        elif action == "revise_fitness_goal":
+            return process_revise_fitness_goal(action_data)
 
         return None
 
@@ -698,7 +706,7 @@ def process_block_summary(action_data: dict) -> str:
 
 
 def process_create_block(action_data: dict) -> str:
-    """Create a new training block."""
+    """Create a new training block and generate all workouts for it."""
     try:
         block = create_training_block(
             name=action_data["name"],
@@ -712,12 +720,56 @@ def process_create_block(action_data: dict) -> str:
             cycling_days=action_data.get("cycling_days"),
             notes=action_data.get("notes"),
         )
+
         msg = f"🏗️ Training block created: {block['name']}\n"
         msg += f"  Phase: {block['phase']} | {block['start_date']} → {block['end_date']}\n"
         if block.get("calorie_target"):
             msg += f"  Targets: {block['calorie_target']} cal / {block.get('protein_target', '?')}g protein\n"
         if block.get("weight_start"):
             msg += f"  Weight: {block['weight_start']}kg → {block.get('weight_target', '?')}kg\n"
+
+        # Auto-generate all workouts for the block
+        workout_result = generate_block_workouts(
+            block_id=block["id"],
+            start_date=action_data["start_date"],
+            end_date=action_data["end_date"],
+        )
+
+        msg += f"\n📅 Generated {workout_result['sessions_created']} training sessions:\n"
+        by_week = {}
+        for s in workout_result["sessions"]:
+            from datetime import datetime as dt
+            d = dt.strptime(s["date"], "%Y-%m-%d")
+            week_num = (d - dt.strptime(action_data["start_date"], "%Y-%m-%d")).days // 7 + 1
+            if week_num not in by_week:
+                by_week[week_num] = []
+            day_name = d.strftime("%a %b %d")
+            by_week[week_num].append(f"    {day_name}: {s['session_type']} ({s['exercises']} exercises)")
+
+        for week, sessions in sorted(by_week.items()):
+            msg += f"  Week {week}:\n"
+            msg += "\n".join(sessions) + "\n"
+
+        # Push to Google Calendar
+        try:
+            service = get_calendar_service()
+            cal_created = 0
+            for event in workout_result["calendar_events"]:
+                create_event(
+                    service,
+                    date_str=event["date"],
+                    start_time=event["start"],
+                    end_time=event["end"],
+                    title=event["title"],
+                    description=event.get("description"),
+                    color_id=COLOR_MAP.get("exercise"),
+                )
+                cal_created += 1
+            msg += f"\n📅 Added {cal_created} sessions to Google Calendar."
+        except Exception as e:
+            logger.error(f"Calendar push error: {e}")
+            msg += f"\n⚠️ Couldn't push to calendar: {e}"
+
         return msg
 
     except Exception as e:
@@ -735,3 +787,52 @@ def process_progress_photos(action_data: dict) -> str:
     except Exception as e:
         logger.error(f"Progress photos error: {e}")
         return f"⚠️ Error logging photos: {e}"
+
+
+def process_add_fitness_goal(action_data: dict) -> str:
+    """Add a fitness goal."""
+    try:
+        goal = add_fitness_goal(
+            category=action_data["category"],
+            goal_text=action_data["goal_text"],
+            target_value=action_data.get("target_value"),
+            target_date=action_data.get("target_date"),
+            notes=action_data.get("notes"),
+        )
+        msg = f"🎯 Fitness goal added: {goal['goal_text']}"
+        if goal.get("target_value"):
+            msg += f" → {goal['target_value']}"
+        if goal.get("target_date"):
+            msg += f" (by {goal['target_date']})"
+        return msg
+    except Exception as e:
+        logger.error(f"Add fitness goal error: {e}")
+        return f"⚠️ Error adding goal: {e}"
+
+
+def process_achieve_fitness_goal(action_data: dict) -> str:
+    """Mark a fitness goal as achieved."""
+    try:
+        success = achieve_fitness_goal(action_data["goal_fragment"])
+        if success:
+            return f"🏆 Fitness goal achieved: {action_data['goal_fragment']}"
+        return f"⚠️ No active goal matching '{action_data['goal_fragment']}'"
+    except Exception as e:
+        logger.error(f"Achieve fitness goal error: {e}")
+        return f"⚠️ Error: {e}"
+
+
+def process_revise_fitness_goal(action_data: dict) -> str:
+    """Revise a fitness goal."""
+    try:
+        success = revise_fitness_goal(
+            goal_fragment=action_data["goal_fragment"],
+            new_text=action_data.get("new_text"),
+            new_target=action_data.get("new_target"),
+        )
+        if success:
+            return f"📝 Fitness goal revised: {action_data.get('new_text', action_data['goal_fragment'])}"
+        return f"⚠️ No active goal matching '{action_data['goal_fragment']}'"
+    except Exception as e:
+        logger.error(f"Revise fitness goal error: {e}")
+        return f"⚠️ Error: {e}"

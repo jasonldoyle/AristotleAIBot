@@ -513,6 +513,186 @@ def log_progress_photos(date: str = None, notes: str = None) -> dict:
     return result.data[0]
 
 
+# ============== FITNESS GOALS ==============
+
+def add_fitness_goal(
+    category: str, goal_text: str, target_value: str = None,
+    target_date: str = None, notes: str = None
+) -> dict:
+    """Add a fitness goal. Categories: body_composition, strength, aesthetic, habit, timeline."""
+    result = supabase.table("fitness_goals").insert({
+        "category": category, "goal_text": goal_text,
+        "target_value": target_value, "target_date": target_date,
+        "notes": notes,
+    }).execute()
+    return result.data[0]
+
+
+def get_fitness_goals(status: str = "active") -> list[dict]:
+    """Get all fitness goals by status."""
+    result = supabase.table("fitness_goals").select("*").eq(
+        "status", status
+    ).order("category").execute()
+    return result.data
+
+
+def achieve_fitness_goal(goal_fragment: str) -> bool:
+    """Mark a fitness goal as achieved by partial text match."""
+    goals = get_fitness_goals("active")
+    for g in goals:
+        if goal_fragment.lower() in g["goal_text"].lower():
+            supabase.table("fitness_goals").update({
+                "status": "achieved",
+                "achieved_at": datetime.now().isoformat(),
+            }).eq("id", g["id"]).execute()
+            return True
+    return False
+
+
+def revise_fitness_goal(goal_fragment: str, new_text: str = None, new_target: str = None) -> bool:
+    """Revise a fitness goal."""
+    goals = get_fitness_goals("active")
+    for g in goals:
+        if goal_fragment.lower() in g["goal_text"].lower():
+            updates = {"status": "revised"}
+            if new_text:
+                updates["goal_text"] = new_text
+            if new_target:
+                updates["target_value"] = new_target
+            supabase.table("fitness_goals").update(updates).eq("id", g["id"]).execute()
+            # Create new active version if revised
+            if new_text:
+                add_fitness_goal(
+                    category=g["category"], goal_text=new_text,
+                    target_value=new_target or g.get("target_value"),
+                    target_date=g.get("target_date"),
+                )
+            return True
+    return False
+
+
+# ============== WORKOUT TEMPLATES ==============
+
+def get_workout_template(session_type: str) -> list[dict]:
+    """Get the exercise template for a session type."""
+    result = supabase.table("workout_templates").select("*").eq(
+        "session_type", session_type
+    ).order("exercise_order").execute()
+    return result.data
+
+
+def get_all_templates() -> dict:
+    """Get all workout templates grouped by session type."""
+    result = supabase.table("workout_templates").select("*").order(
+        "session_type"
+    ).order("exercise_order").execute()
+
+    templates = {}
+    for row in result.data:
+        st = row["session_type"]
+        if st not in templates:
+            templates[st] = []
+        templates[st].append(row)
+    return templates
+
+
+def update_template_exercise(session_type: str, exercise_order: int, updates: dict) -> bool:
+    """Update a specific exercise in a workout template."""
+    result = supabase.table("workout_templates").update(updates).eq(
+        "session_type", session_type
+    ).eq("exercise_order", exercise_order).execute()
+    return len(result.data) > 0
+
+
+# ============== BLOCK WORKOUT GENERATION ==============
+
+# Default weekly schedule: (day_of_week, session_type)
+# 0=Mon, 1=Tue, 3=Thu, 5=Sat
+WEEKLY_SCHEDULE = [
+    (0, "Push"),
+    (1, "Legs"),
+    (3, "Upper Hypertrophy"),
+    (5, "Shoulders + Arms"),
+]
+
+# Default session times
+SESSION_TIMES = {
+    "Push": ("06:30", "07:45"),
+    "Legs": ("06:30", "07:30"),
+    "Upper Hypertrophy": ("06:30", "07:45"),
+    "Shoulders + Arms": ("09:00", "10:15"),
+}
+
+
+def generate_block_workouts(block_id: str, start_date: str, end_date: str) -> dict:
+    """Generate all training sessions for a block with exercises from templates.
+    Returns dict with sessions created and calendar events."""
+
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    templates = get_all_templates()
+    sessions_created = []
+    calendar_events = []
+
+    current = start
+    while current <= end:
+        weekday = current.weekday()
+
+        for sched_day, session_type in WEEKLY_SCHEDULE:
+            if weekday == sched_day and session_type in templates:
+                date_str = current.strftime("%Y-%m-%d")
+                times = SESSION_TIMES.get(session_type, ("06:30", "07:45"))
+
+                # Create the training session (scheduled but not yet completed)
+                session = supabase.table("training_sessions").insert({
+                    "date": date_str,
+                    "session_type": session_type,
+                    "scheduled": True,
+                    "completed": False,
+                    "block_id": block_id,
+                }).execute()
+
+                session_id = session.data[0]["id"]
+
+                # Pre-populate exercises from template
+                for tmpl in templates[session_type]:
+                    supabase.table("training_exercises").insert({
+                        "session_id": session_id,
+                        "exercise_name": tmpl["exercise_name"],
+                        "sets": tmpl["sets"],
+                        "reps": None,  # Will be filled when logged
+                        "weight_kg": None,
+                        "is_main_lift": tmpl["is_main_lift"],
+                        "notes": f"Target: {tmpl['rep_range']} reps",
+                    }).execute()
+
+                sessions_created.append({
+                    "date": date_str,
+                    "session_type": session_type,
+                    "session_id": session_id,
+                    "exercises": len(templates[session_type]),
+                })
+
+                # Build calendar event
+                calendar_events.append({
+                    "date": date_str,
+                    "start": times[0],
+                    "end": times[1],
+                    "title": f"🏋️ {session_type}",
+                    "category": "exercise",
+                    "description": ", ".join(t["exercise_name"] for t in templates[session_type]),
+                })
+
+        current += timedelta(days=1)
+
+    return {
+        "sessions_created": len(sessions_created),
+        "sessions": sessions_created,
+        "calendar_events": calendar_events,
+    }
+
+
 # ============== LEGACY COMPATIBILITY ==============
 
 def log_fitness_exercises(exercises: list[dict]) -> int:

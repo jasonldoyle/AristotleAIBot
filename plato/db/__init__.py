@@ -24,6 +24,12 @@ from plato.db.fitness import (
     generate_weekly_summary, generate_block_summary,
     # Progress photos
     log_progress_photos,
+    # Fitness goals
+    add_fitness_goal, get_fitness_goals, achieve_fitness_goal, revise_fitness_goal,
+    # Workout templates
+    get_workout_template, get_all_templates, update_template_exercise,
+    # Block workout generation
+    generate_block_workouts, WEEKLY_SCHEDULE, SESSION_TIMES,
 )
 from plato.db.schedule import (
     store_schedule_events, get_planned_events_for_date,
@@ -54,6 +60,9 @@ __all__ = [
     "create_training_block", "get_current_block",
     "generate_weekly_summary", "generate_block_summary",
     "log_progress_photos",
+    "add_fitness_goal", "get_fitness_goals", "achieve_fitness_goal", "revise_fitness_goal",
+    "get_workout_template", "get_all_templates", "update_template_exercise",
+    "generate_block_workouts", "WEEKLY_SCHEDULE", "SESSION_TIMES",
     "store_schedule_events", "get_planned_events_for_date",
     "update_schedule_event", "mark_evening_audrey", "get_weekly_adherence",
     "store_pending_plan", "get_pending_plan", "clear_pending_plan",
