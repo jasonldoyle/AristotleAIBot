@@ -249,11 +249,33 @@ def confirm_progression(lift_key: str) -> str:
         return f"No pending progression for {lift_key}."
 
     entry = result.data[0]
+    new_weight = entry["next_weight_kg"]
+
+    # Confirm the progression
     supabase.table("main_lift_progress").update(
         {"confirmed": True}
     ).eq("id", entry["id"]).execute()
 
-    return f"✅ Confirmed: {MAIN_LIFTS[lift_key]['name']} → {entry['next_weight_kg']}kg next session."
+    # Update template weight for future session generation
+    lift_name = MAIN_LIFTS[lift_key]["name"]
+    update_template_weight(lift_name, float(new_weight))
+
+    # Update weight on future scheduled (not yet completed) sessions
+    try:
+        future_sessions = supabase.table("training_sessions").select("id").eq(
+            "completed", False
+        ).gte("date", datetime.now().strftime("%Y-%m-%d")).execute()
+
+        for session in future_sessions.data:
+            supabase.table("training_exercises").update(
+                {"weight_kg": new_weight}
+            ).eq("session_id", session["id"]).ilike(
+                "exercise_name", f"%{lift_name}%"
+            ).execute()
+    except Exception as e:
+        logger.error(f"Failed to update future sessions: {e}")
+
+    return f"✅ Confirmed: {lift_name} → {new_weight}kg (updated template + future sessions)"
 
 
 # ============== NUTRITION LOGS ==============
@@ -696,7 +718,8 @@ def plan_next_block(year: int, month: int, weight_start: float = None) -> dict:
 
 def generate_block_workouts(block_id: str, start_date: str, end_date: str) -> dict:
     """Generate all training sessions for a block with exercises from templates.
-    Sessions only — no calendar events (scheduling is separate)."""
+    Sessions only — no calendar events (scheduling is separate).
+    Exercises include current working weights from templates."""
 
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
@@ -728,7 +751,7 @@ def generate_block_workouts(block_id: str, start_date: str, end_date: str) -> di
                         "exercise_name": tmpl["exercise_name"],
                         "sets": tmpl["sets"],
                         "reps": None,
-                        "weight_kg": None,
+                        "weight_kg": tmpl.get("current_weight_kg"),
                         "is_main_lift": tmpl["is_main_lift"],
                         "notes": f"Target: {tmpl['rep_range']} reps",
                     }).execute()
@@ -773,3 +796,168 @@ def get_recent_fitness(days: int = 7) -> list[dict]:
                 "notes": ex.get("notes"),
             })
     return flat
+
+
+# ============== TODAY'S WORKOUT ==============
+
+def get_todays_workout(date: str = None) -> dict | None:
+    """Get today's scheduled (not yet completed) training session with exercises."""
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    sessions = supabase.table("training_sessions").select("*").eq(
+        "date", date
+    ).eq("completed", False).eq("scheduled", True).execute()
+
+    if not sessions.data:
+        return None
+
+    session = sessions.data[0]
+    exercises = supabase.table("training_exercises").select("*").eq(
+        "session_id", session["id"]
+    ).order("id").execute()
+
+    session["exercises"] = exercises.data
+    return session
+
+
+def format_todays_workout(session: dict) -> str:
+    """Format a scheduled session into a readable workout plan."""
+    msg = f"🏋️ {session['session_type']} — {session['date']}\n\n"
+
+    for i, ex in enumerate(session.get("exercises", []), 1):
+        weight_str = f" @ {ex['weight_kg']}kg" if ex.get("weight_kg") else ""
+        target = ex.get("notes", "").replace("Target: ", "") if ex.get("notes") else ""
+        main = "⭐ " if ex.get("is_main_lift") else ""
+        msg += f"{i}. {main}{ex['exercise_name']}: {ex['sets']} sets × {target}{weight_str}\n"
+
+    return msg
+
+
+# ============== WORKOUT COMPLETION ==============
+
+def complete_workout(date: str = None, feedback: str = None, exceptions: list[dict] = None) -> dict:
+    """Mark today's workout as completed with optional exceptions.
+    
+    exceptions format: [{"exercise": "Lateral Raise", "actual_reps": 6, "notes": "arms too tired"}]
+    If no exceptions, all exercises assumed completed as planned.
+    """
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    session = get_todays_workout(date)
+    if not session:
+        # Check if already completed
+        done = supabase.table("training_sessions").select("*").eq(
+            "date", date
+        ).eq("completed", True).execute()
+        if done.data:
+            return {"error": "Already completed today's workout."}
+        return {"error": "No scheduled workout found for today."}
+
+    # Mark session completed
+    supabase.table("training_sessions").update({
+        "completed": True,
+        "feedback": feedback,
+    }).eq("id", session["id"]).execute()
+
+    # Process exceptions — update specific exercises
+    exception_results = []
+    if exceptions:
+        for exc in exceptions:
+            exercise_name = exc.get("exercise", "").lower()
+            for ex in session["exercises"]:
+                if exercise_name in ex["exercise_name"].lower():
+                    updates = {}
+                    if "actual_reps" in exc:
+                        updates["reps"] = exc["actual_reps"]
+                    if "actual_weight" in exc:
+                        updates["weight_kg"] = exc["actual_weight"]
+                    if "notes" in exc:
+                        updates["notes"] = exc["notes"]
+                    if updates:
+                        supabase.table("training_exercises").update(
+                            updates
+                        ).eq("id", ex["id"]).execute()
+                        exception_results.append({
+                            "exercise": ex["exercise_name"],
+                            "changes": updates,
+                        })
+                    break
+
+    # Track main lifts — use planned weights for completed-as-planned exercises
+    main_lift_results = []
+    for ex in session["exercises"]:
+        if ex.get("is_main_lift") and ex.get("weight_kg"):
+            lift_key = _get_lift_key(ex["exercise_name"])
+            if lift_key:
+                # Check if this exercise had an exception
+                had_exception = any(
+                    e["exercise"].lower() in ex["exercise_name"].lower()
+                    for e in (exceptions or [])
+                )
+                if had_exception:
+                    # Use exception reps if provided
+                    exc_data = next(
+                        (e for e in exceptions if e["exercise"].lower() in ex["exercise_name"].lower()),
+                        {}
+                    )
+                    reps = exc_data.get("actual_reps", 0)
+                else:
+                    # Completed as planned — parse target reps from notes
+                    target_str = (ex.get("notes") or "").replace("Target: ", "").split("-")
+                    reps = int(target_str[-1].strip().split(" ")[0]) if target_str else 0
+
+                if reps > 0:
+                    prog = _track_main_lift(
+                        date=date,
+                        lift_key=lift_key,
+                        weight=float(ex["weight_kg"]),
+                        sets=ex["sets"],
+                        reps=reps,
+                    )
+                    if prog:
+                        main_lift_results.append(prog)
+
+    return {
+        "session_type": session["session_type"],
+        "exercises": len(session["exercises"]),
+        "exceptions": exception_results,
+        "main_lift_progressions": main_lift_results,
+    }
+
+
+def update_template_weight(exercise_name: str, new_weight: float) -> bool:
+    """Update the working weight for an exercise across all templates it appears in."""
+    result = supabase.table("workout_templates").update({
+        "current_weight_kg": new_weight
+    }).ilike("exercise_name", f"%{exercise_name}%").execute()
+    return len(result.data) > 0
+
+
+def adjust_exercise_weight(exercise_name: str, new_weight: float) -> dict:
+    """Adjust weight for any exercise — updates template + all future scheduled sessions."""
+    # Update template
+    template_updated = update_template_weight(exercise_name, new_weight)
+
+    # Update all future uncompleted sessions
+    future_sessions = supabase.table("training_sessions").select("id").eq(
+        "completed", False
+    ).gte("date", datetime.now().strftime("%Y-%m-%d")).execute()
+
+    sessions_updated = 0
+    for session in future_sessions.data:
+        result = supabase.table("training_exercises").update(
+            {"weight_kg": new_weight}
+        ).eq("session_id", session["id"]).ilike(
+            "exercise_name", f"%{exercise_name}%"
+        ).execute()
+        if result.data:
+            sessions_updated += 1
+
+    return {
+        "exercise": exercise_name,
+        "new_weight": new_weight,
+        "template_updated": template_updated,
+        "sessions_updated": sessions_updated,
+    }

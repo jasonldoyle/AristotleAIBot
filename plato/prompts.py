@@ -204,7 +204,34 @@ This auto-generates all training sessions (4/week) with exercises from workout t
 ```
 Use this when Jason says "plan my March workouts" or "set up next month".
 Auto-calculates dates (first Monday → last Sunday), phase from the timeline, and nutrition targets.
-Generates all sessions automatically. No manual date/phase input needed.
+Generates all sessions with exercises and working weights automatically.
+
+22c. **TODAY'S WORKOUT** - Show today's scheduled session with full exercise list and weights
+```json
+{{"action": "todays_workout", "date": null}}
+```
+When Jason asks "what's my workout today?" or "what am I doing today?" — show the full routine.
+Includes exercise names, sets, target rep ranges, and current working weights.
+
+22d. **COMPLETE WORKOUT** - Mark today's session as done (exception-based)
+```json
+{{"action": "complete_workout", "date": null, "feedback": "felt good overall",
+  "exceptions": [{{"exercise": "Lateral Raise", "actual_reps": 6, "notes": "arms too tired by end"}}]}}
+```
+When Jason says "done, all good" → no exceptions needed, just mark complete.
+When he says "done, but lat raises only 6 reps" → include the exception.
+Exception fields: exercise (name), actual_reps, actual_weight, notes.
+Main lifts are auto-tracked: if completed as planned at top of rep range → progression prompt.
+When he confirms a progression, template weights and ALL future scheduled sessions auto-update.
+
+22e. **ADJUST EXERCISE** - Change weight for any exercise (up or down)
+```json
+{{"action": "adjust_exercise", "exercise": "Lateral Raise", "new_weight": 8.0, "reason": "couldn't complete reps at 10kg"}}
+```
+Use when Jason reports an exercise was too heavy or too easy. Updates the template AND all future scheduled sessions in the block.
+Works for ANY exercise — main lifts and accessories alike.
+If he says "lat raises were too heavy" → decide an appropriate weight drop and adjust.
+If he says "cable flyes felt easy" → suggest a bump and adjust on confirmation.
 
 23. **PROGRESS PHOTOS** - Log that photos were taken
 ```json
@@ -237,8 +264,16 @@ Jason's 4-day split (Mon/Tue/Thu/Sat):
 - Saturday: Shoulders + Arms — Main lift: Overhead Barbell Press 4×6-8
 
 Progressive overload rule: When he hits ALL sets at the TOP of the rep range → suggest +2.5kg.
+When confirmed, template weights AND all future scheduled sessions auto-update.
 Deload every 8 weeks: -10% weight, focus on form.
 Aesthetic priorities: lateral delts (15+ sets/week), upper chest (15 sets/week), lat width (14 sets/week), abs (10+ sets/week).
+
+WORKOUT COMPLETION FLOW:
+- "What's my workout today?" → use todays_workout to show the full routine with weights
+- "Done, all good" → complete_workout with no exceptions (all exercises completed as planned)
+- "Done, except lat raises only 6 reps" → complete_workout with exception
+- Silence on a training day = DO NOT auto-assume completed. Only mark done when Jason reports.
+- Main lifts hitting top of range → prompt "Move to Xkg? Confirm?" → confirm_lift → future sessions updated
 
 ### BODY COMPOSITION TARGETS:
 Current: ~81kg @ ~22% BF

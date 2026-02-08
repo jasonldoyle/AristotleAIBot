@@ -21,6 +21,8 @@ from plato.db import (
     add_fitness_goal, get_fitness_goals, achieve_fitness_goal,
     revise_fitness_goal, generate_block_workouts,
     calculate_block_dates, get_phase_for_month, get_nutrition_for_phase, plan_next_block,
+    get_todays_workout, format_todays_workout, complete_workout,
+    update_template_weight, adjust_exercise_weight,
 )
 from plato_calendar import (
     get_calendar_service, clear_plato_events, create_weekly_events,
@@ -104,6 +106,12 @@ def process_action(action_data: dict, raw_message: str) -> str | None:
             return process_create_block(action_data)
         elif action == "plan_next_block":
             return process_plan_next_block(action_data)
+        elif action == "todays_workout":
+            return process_todays_workout(action_data)
+        elif action == "complete_workout":
+            return process_complete_workout(action_data)
+        elif action == "adjust_exercise":
+            return process_adjust_exercise(action_data)
         elif action == "progress_photos":
             return process_progress_photos(action_data)
         elif action == "add_fitness_goal":
@@ -816,6 +824,87 @@ def process_plan_next_block(action_data: dict) -> str:
     except Exception as e:
         logger.error(f"Plan next block error: {e}")
         return f"⚠️ Error planning block: {e}"
+
+
+def process_todays_workout(action_data: dict) -> str:
+    """Return today's scheduled workout with full exercise list and weights."""
+    try:
+        date = action_data.get("date", datetime.now().strftime("%Y-%m-%d"))
+        session = get_todays_workout(date)
+
+        if not session:
+            return f"No scheduled workout for {date}. Rest day or already completed."
+
+        return format_todays_workout(session)
+
+    except Exception as e:
+        logger.error(f"Today's workout error: {e}")
+        return f"⚠️ Error fetching workout: {e}"
+
+
+def process_complete_workout(action_data: dict) -> str:
+    """Mark today's workout as completed with optional exceptions."""
+    try:
+        date = action_data.get("date", datetime.now().strftime("%Y-%m-%d"))
+        feedback = action_data.get("feedback")
+        exceptions = action_data.get("exceptions")
+
+        result = complete_workout(date=date, feedback=feedback, exceptions=exceptions)
+
+        if "error" in result:
+            return f"⚠️ {result['error']}"
+
+        msg = f"✅ {result['session_type']} completed — {result['exercises']} exercises"
+
+        if result["exceptions"]:
+            msg += "\n📝 Exceptions noted:"
+            for exc in result["exceptions"]:
+                changes = []
+                if "reps" in exc["changes"]:
+                    changes.append(f"{exc['changes']['reps']} reps")
+                if "weight_kg" in exc["changes"]:
+                    changes.append(f"{exc['changes']['weight_kg']}kg")
+                if "notes" in exc["changes"]:
+                    changes.append(exc["changes"]["notes"])
+                msg += f"\n  • {exc['exercise']}: {', '.join(changes)}"
+
+        for prog in result.get("main_lift_progressions", []):
+            if prog["hit_target"]:
+                msg += f"\n🔥 {prog['lift']}: {prog['weight']}kg × {prog['sets']}×{prog['reps']} — HIT TARGET!"
+                msg += f"\n📈 Ready to move to {prog['next_weight']}kg. Confirm?"
+            else:
+                msg += f"\n🏋️ {prog['lift']}: {prog['weight']}kg × {prog['sets']}×{prog['reps']}"
+
+        if feedback:
+            msg += f"\n💬 {feedback}"
+
+        return msg
+
+    except Exception as e:
+        logger.error(f"Complete workout error: {e}")
+        return f"⚠️ Error completing workout: {e}"
+
+
+def process_adjust_exercise(action_data: dict) -> str:
+    """Adjust weight for any exercise — template + all future sessions."""
+    try:
+        exercise = action_data["exercise"]
+        new_weight = float(action_data["new_weight"])
+        reason = action_data.get("reason", "")
+
+        result = adjust_exercise_weight(exercise, new_weight)
+
+        direction = "📈" if new_weight > 0 else "📉"
+        msg = f"{direction} {result['exercise']} adjusted to {result['new_weight']}kg"
+        if result["sessions_updated"]:
+            msg += f" — updated {result['sessions_updated']} future sessions"
+        if reason:
+            msg += f"\n  Reason: {reason}"
+        return msg
+
+    except Exception as e:
+        logger.error(f"Adjust exercise error: {e}")
+        return f"⚠️ Error adjusting exercise: {e}"
 
 
 def process_progress_photos(action_data: dict) -> str:
