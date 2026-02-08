@@ -12,7 +12,12 @@ from plato.db import (
     clear_pending_plan, store_schedule_events, update_schedule_event,
     get_planned_events_for_date, mark_evening_audrey, park_idea, resolve_idea,
     parse_revolut_csv, parse_aib_csv, import_transactions,
-    get_monthly_summary, check_budget_alerts, set_budget_limit
+    get_monthly_summary, check_budget_alerts, set_budget_limit,
+    # New fitness imports
+    log_daily, log_training_session, log_missed_session,
+    confirm_progression, parse_mfp_diary, import_nutrition,
+    create_training_block, generate_weekly_summary, generate_block_summary,
+    log_progress_photos, get_all_lift_latest, MAIN_LIFTS,
 )
 from plato_calendar import (
     get_calendar_service, clear_plato_events, create_weekly_events,
@@ -74,12 +79,28 @@ def process_action(action_data: dict, raw_message: str) -> str | None:
                 return f"{'✅' if action_data['status'] == 'approved' else '❌'} Idea resolved: {action_data['status']}"
             else:
                 return f"⚠️ Couldn't find parked idea matching '{action_data['idea_fragment']}'"
-
         elif action == "finance_review":
             return process_finance_review(action_data)
-
         elif action == "set_budget":
             return process_set_budget(action_data)
+
+        # ===== NEW FITNESS ACTIONS =====
+        elif action == "daily_log":
+            return process_daily_log(action_data)
+        elif action == "log_workout":
+            return process_log_workout(action_data)
+        elif action == "missed_workout":
+            return process_missed_workout(action_data)
+        elif action == "confirm_lift":
+            return process_confirm_lift(action_data)
+        elif action == "weekly_fitness_summary":
+            return process_weekly_fitness_summary(action_data)
+        elif action == "block_summary":
+            return process_block_summary(action_data)
+        elif action == "create_block":
+            return process_create_block(action_data)
+        elif action == "progress_photos":
+            return process_progress_photos(action_data)
 
         return None
 
@@ -182,7 +203,6 @@ def _process_add_pattern(action_data: dict) -> str | None:
 # ============== CALENDAR ACTIONS ==============
 
 def process_plan_week(action_data: dict) -> str:
-    """Store plan as pending for approval."""
     try:
         events = action_data.get("events", [])
         if not events:
@@ -205,7 +225,6 @@ def process_plan_week(action_data: dict) -> str:
 
         summary += f"Total: {len(events)} blocks.\n"
         summary += "Say 'approve' to push to calendar, or tell me what to change."
-
         return summary
 
     except Exception as e:
@@ -214,14 +233,12 @@ def process_plan_week(action_data: dict) -> str:
 
 
 def process_approve_plan() -> str:
-    """Push the pending plan to Google Calendar."""
     try:
         events = get_pending_plan()
         if not events:
             return "⚠️ No pending plan to approve. Say 'plan my week' first."
 
         service = get_calendar_service()
-
         first_date = datetime.strptime(events[0]["date"], "%Y-%m-%d")
         week_start = first_date - timedelta(days=first_date.weekday())
 
@@ -238,7 +255,6 @@ def process_approve_plan() -> str:
 
 
 def process_audrey_time(action_data: dict) -> str:
-    """Cancel evening events and report what's bumped."""
     try:
         date_str = action_data.get("date", datetime.now().strftime("%Y-%m-%d"))
         from_time = action_data.get("from_time", "18:00")
@@ -259,10 +275,8 @@ def process_audrey_time(action_data: dict) -> str:
 
 
 def process_add_event(action_data: dict) -> str:
-    """Add a one-off event to calendar."""
     try:
         service = get_calendar_service()
-
         date_str = action_data["date"]
         start = action_data["start"]
         end = action_data["end"]
@@ -271,17 +285,11 @@ def process_add_event(action_data: dict) -> str:
         description = action_data.get("description")
 
         create_event(
-            service,
-            date_str=date_str,
-            start_time=start,
-            end_time=end,
-            title=title,
-            description=description,
+            service, date_str=date_str, start_time=start, end_time=end,
+            title=title, description=description,
             color_id=COLOR_MAP.get(category)
         )
-
-        msg = f"📌 Added: {title} on {date_str} {start}-{end}"
-        return msg
+        return f"📌 Added: {title} on {date_str} {start}-{end}"
 
     except Exception as e:
         logger.error(f"Add event error: {e}")
@@ -289,7 +297,6 @@ def process_add_event(action_data: dict) -> str:
 
 
 def process_check_in(action_data: dict) -> str:
-    """Update schedule event with actual outcome."""
     try:
         event_id = action_data.get("event_id")
         status = action_data.get("status", "completed")
@@ -323,7 +330,6 @@ def process_check_in(action_data: dict) -> str:
 # ============== FINANCE ACTIONS ==============
 
 def process_import_csv(csv_content: str, source: str) -> str:
-    """Parse and import a CSV file from Revolut or AIB."""
     try:
         if source == "revolut":
             transactions = parse_revolut_csv(csv_content)
@@ -345,9 +351,7 @@ def process_import_csv(csv_content: str, source: str) -> str:
             msg += f" ({stats['skipped']} duplicates skipped)"
         msg += f"\n📊 Income: €{income:,.2f} | Spending: €{spending:,.2f}"
 
-        # Check budget alerts
-        from datetime import datetime as dt
-        now = dt.now()
+        now = datetime.now()
         alerts = check_budget_alerts(now.year, now.month)
         if alerts:
             msg += "\n\n🚨 Budget alerts:"
@@ -363,7 +367,6 @@ def process_import_csv(csv_content: str, source: str) -> str:
 
 
 def process_finance_review(action_data: dict) -> str:
-    """Generate a finance summary for a given month."""
     try:
         year = action_data.get("year", datetime.now().year)
         month = action_data.get("month", datetime.now().month)
@@ -382,7 +385,6 @@ def process_finance_review(action_data: dict) -> str:
             for cat, amount in summary["by_category"].items():
                 msg += f"  • {cat}: €{amount:,.2f}\n"
 
-        # Check budget alerts
         alerts = check_budget_alerts(year, month)
         if alerts:
             msg += "\n🚨 Budget alerts:\n"
@@ -398,7 +400,6 @@ def process_finance_review(action_data: dict) -> str:
 
 
 def process_set_budget(action_data: dict) -> str:
-    """Set a budget limit for a category."""
     try:
         category = action_data["category"]
         limit = float(action_data["monthly_limit"])
@@ -407,3 +408,330 @@ def process_set_budget(action_data: dict) -> str:
     except Exception as e:
         logger.error(f"Set budget error: {e}")
         return f"⚠️ Error setting budget: {e}"
+
+
+# ============== FITNESS ACTIONS ==============
+
+def process_daily_log(action_data: dict) -> str:
+    """Log daily check-in: weight, skincare, health, steps, cycling."""
+    try:
+        date = action_data.get("date", datetime.now().strftime("%Y-%m-%d"))
+        kwargs = {}
+
+        if "weight_kg" in action_data:
+            kwargs["weight_kg"] = float(action_data["weight_kg"])
+        if "steps" in action_data:
+            kwargs["steps"] = int(action_data["steps"])
+        if "skincare_am" in action_data:
+            kwargs["skincare_am"] = action_data["skincare_am"]
+        if "skincare_pm" in action_data:
+            kwargs["skincare_pm"] = action_data["skincare_pm"]
+        if "skincare_notes" in action_data:
+            kwargs["skincare_notes"] = action_data["skincare_notes"]
+        if "cycling_scheduled" in action_data:
+            kwargs["cycling_scheduled"] = action_data["cycling_scheduled"]
+        if "cycling_completed" in action_data:
+            kwargs["cycling_completed"] = action_data["cycling_completed"]
+        if "cycling_notes" in action_data:
+            kwargs["cycling_notes"] = action_data["cycling_notes"]
+        if "urticaria_severity" in action_data:
+            kwargs["urticaria_severity"] = action_data["urticaria_severity"]
+        if "breakout_severity" in action_data:
+            kwargs["breakout_severity"] = action_data["breakout_severity"]
+        if "breakout_location" in action_data:
+            kwargs["breakout_location"] = action_data["breakout_location"]
+        if "health_notes" in action_data:
+            kwargs["health_notes"] = action_data["health_notes"]
+        if "sleep_hours" in action_data:
+            kwargs["sleep_hours"] = float(action_data["sleep_hours"])
+
+        log_daily(date=date, **kwargs)
+
+        # Build confirmation message
+        parts = []
+        if "weight_kg" in kwargs:
+            parts.append(f"⚖️ {kwargs['weight_kg']}kg")
+        if "steps" in kwargs:
+            parts.append(f"👟 {kwargs['steps']:,} steps")
+        if "skincare_am" in kwargs and not kwargs["skincare_am"]:
+            parts.append("☀️ Skincare AM missed")
+        if "skincare_pm" in kwargs and not kwargs["skincare_pm"]:
+            parts.append("🌙 Skincare PM missed")
+        if "cycling_completed" in kwargs and not kwargs["cycling_completed"]:
+            parts.append(f"🚴 Cycling missed: {kwargs.get('cycling_notes', 'no reason')}")
+        if "urticaria_severity" in kwargs:
+            parts.append(f"🔴 Urticaria: {kwargs['urticaria_severity']}/10")
+        if "breakout_severity" in kwargs:
+            parts.append(f"😤 Breakout: {kwargs['breakout_severity']}/10")
+        if "sleep_hours" in kwargs:
+            parts.append(f"😴 {kwargs['sleep_hours']}h sleep")
+
+        if parts:
+            return "📋 Daily log updated:\n" + "\n".join(f"  {p}" for p in parts)
+        return "📋 Daily log updated."
+
+    except Exception as e:
+        logger.error(f"Daily log error: {e}")
+        return f"⚠️ Error logging daily: {e}"
+
+
+def process_log_workout(action_data: dict) -> str:
+    """Log a full training session with exercises and progressive overload tracking."""
+    try:
+        session_type = action_data["session_type"]
+        exercises = action_data.get("exercises", [])
+        date = action_data.get("date", datetime.now().strftime("%Y-%m-%d"))
+        feedback = action_data.get("feedback")
+        duration = action_data.get("duration_mins")
+
+        result = log_training_session(
+            session_type=session_type,
+            exercises=exercises,
+            date=date,
+            feedback=feedback,
+            duration_mins=duration,
+        )
+
+        msg = f"💪 {result['session']['session_type']} logged — {result['exercise_count']} exercises"
+        if duration:
+            msg += f" ({duration} mins)"
+
+        # Report main lift progressions
+        for prog in result["main_lift_progressions"]:
+            if prog["hit_target"]:
+                msg += f"\n  🔥 {prog['lift']}: {prog['weight']}kg × {prog['sets']}×{prog['reps']} — HIT TARGET!"
+                msg += f"\n  📈 Ready to move to {prog['next_weight']}kg. Confirm?"
+            else:
+                msg += f"\n  🏋️ {prog['lift']}: {prog['weight']}kg × {prog['sets']}×{prog['reps']}"
+
+        if feedback:
+            msg += f"\n  💬 {feedback}"
+
+        return msg
+
+    except Exception as e:
+        logger.error(f"Log workout error: {e}")
+        return f"⚠️ Error logging workout: {e}"
+
+
+def process_missed_workout(action_data: dict) -> str:
+    """Log a missed training session."""
+    try:
+        session_type = action_data["session_type"]
+        reason = action_data.get("reason")
+        date = action_data.get("date", datetime.now().strftime("%Y-%m-%d"))
+
+        result = log_missed_session(session_type=session_type, date=date, reason=reason)
+        msg = f"❌ Missed: {result['session_type']}"
+        if reason:
+            msg += f" — {reason}"
+        return msg
+
+    except Exception as e:
+        logger.error(f"Missed workout error: {e}")
+        return f"⚠️ Error logging missed workout: {e}"
+
+
+def process_confirm_lift(action_data: dict) -> str:
+    """Confirm progression for a main lift."""
+    try:
+        lift_key = action_data["lift_key"]
+        return confirm_progression(lift_key)
+    except Exception as e:
+        logger.error(f"Confirm lift error: {e}")
+        return f"⚠️ Error confirming lift: {e}"
+
+
+def process_import_mfp(text: str) -> str:
+    """Parse and import MFP printable diary text."""
+    try:
+        entries = parse_mfp_diary(text)
+        if not entries:
+            return "⚠️ No nutrition data found. Make sure it's the MFP printable diary format."
+
+        stats = import_nutrition(entries)
+
+        # Calculate averages
+        avg_cals = round(sum(e["calories"] for e in entries) / len(entries))
+        avg_protein = round(sum(e["protein_g"] for e in entries) / len(entries))
+        date_range = f"{entries[0]['date']} to {entries[-1]['date']}"
+
+        msg = f"🍽️ Imported {stats['imported']} days of nutrition ({date_range})"
+        if stats["skipped"] > 0:
+            msg += f" ({stats['skipped']} errors)"
+        msg += f"\n📊 Avg: {avg_cals} cal | {avg_protein}g protein"
+
+        # Flag days below targets
+        low_cal = [e for e in entries if e["calories"] < 2800]
+        low_protein = [e for e in entries if e["protein_g"] < 160]
+        if low_cal:
+            msg += f"\n⚠️ {len(low_cal)} days under 2800 cal"
+        if low_protein:
+            msg += f"\n⚠️ {len(low_protein)} days under 160g protein"
+
+        return msg
+
+    except Exception as e:
+        logger.error(f"MFP import error: {e}")
+        return f"⚠️ Error importing MFP data: {e}"
+
+
+def process_weekly_fitness_summary(action_data: dict) -> str:
+    """Generate weekly fitness summary."""
+    try:
+        week_start = action_data.get("week_start")
+        summary = generate_weekly_summary(week_start)
+
+        t = summary["training"]
+        w = summary["weight"]
+        n = summary["nutrition"]
+        c = summary["cycling"]
+        s = summary["skincare"]
+        h = summary["health"]
+
+        msg = f"📊 WEEKLY FITNESS SUMMARY — {summary['week']}\n\n"
+
+        # Training
+        msg += f"🏋️ Training: {t['completed']}/{t['target']} sessions\n"
+        for sess in t["sessions"]:
+            msg += f"  ✅ {sess['date']}: {sess['type']}\n"
+        for miss in t["missed"]:
+            msg += f"  ❌ {miss['type']}: {miss.get('reason', 'no reason')}\n"
+
+        # Weight
+        if w["start"] and w["end"]:
+            change = f"+{w['change']}" if w["change"] and w["change"] > 0 else str(w["change"])
+            msg += f"\n⚖️ Weight: {w['start']}kg → {w['end']}kg ({change}kg)\n"
+        elif w["end"]:
+            msg += f"\n⚖️ Weight: {w['end']}kg\n"
+
+        # Nutrition
+        if n["avg_calories"]:
+            msg += f"\n🍽️ Nutrition: avg {n['avg_calories']} cal / {n['avg_protein']}g protein"
+            msg += f" ({n['days_logged']}/7 days logged)\n"
+            if n["low_cal_days"]:
+                msg += f"  ⚠️ {n['low_cal_days']} days under target calories\n"
+
+        # Main lifts
+        if summary["main_lifts"]:
+            msg += "\n📈 Main Lifts:\n"
+            for lift in summary["main_lifts"]:
+                status = "🔥" if lift["hit_target"] else "🏋️"
+                msg += f"  {status} {lift['name']}: {lift['weight']}kg × {lift['sets']}×{lift['reps']}"
+                if lift.get("progression"):
+                    msg += f" {lift['progression']}"
+                msg += "\n"
+
+        # Cycling
+        if c["scheduled"] > 0:
+            msg += f"\n🚴 Cycling: {c['completed']}/{c['scheduled']} days\n"
+
+        # Steps
+        if summary["steps"] and summary["steps"]["avg"]:
+            msg += f"\n👟 Avg steps: {summary['steps']['avg']:,}\n"
+
+        # Skincare
+        msg += f"\n🧴 Skincare: AM {s['morning']}/{s['total_days']} | PM {s['night']}/{s['total_days']}\n"
+
+        # Health
+        if h["urticaria_days"] or h["breakout_days"]:
+            msg += "\n🏥 Health:\n"
+            if h["urticaria_days"]:
+                msg += f"  Urticaria: {h['urticaria_days']} days\n"
+            if h["breakout_days"]:
+                msg += f"  Breakouts: {h['breakout_days']} days\n"
+
+        return msg
+
+    except Exception as e:
+        logger.error(f"Weekly fitness summary error: {e}")
+        return f"⚠️ Error generating weekly summary: {e}"
+
+
+def process_block_summary(action_data: dict) -> str:
+    """Generate training block summary."""
+    try:
+        block_id = action_data.get("block_id")
+        summary = generate_block_summary(block_id)
+
+        if "error" in summary:
+            return f"⚠️ {summary['error']}"
+
+        t = summary["training"]
+        w = summary["weight"]
+        n = summary["nutrition"]
+        sk = summary["skincare"]
+
+        msg = f"📊 BLOCK SUMMARY — {summary['block']} ({summary['phase'].upper()})\n"
+        msg += f"📅 {summary['dates']}\n\n"
+
+        msg += f"🏋️ Training: {t['total_sessions']}/{t['target_sessions']} sessions ({t['adherence_pct']}%)\n"
+
+        if w["start"] and w["end"]:
+            change = f"+{w['change']}" if w["change"] and w["change"] > 0 else str(w["change"])
+            msg += f"⚖️ Weight: {w['start']}kg → {w['end']}kg ({change}kg)"
+            if w["target"]:
+                msg += f" [target: {w['target']}kg]"
+            msg += "\n"
+
+        if n["avg_calories"]:
+            msg += f"🍽️ Avg nutrition: {n['avg_calories']} cal / {n['avg_protein']}g protein"
+            if n["target_calories"]:
+                cal_diff = n["avg_calories"] - n["target_calories"]
+                msg += f" [target: {n['target_calories']}cal, {'+' if cal_diff > 0 else ''}{cal_diff}]"
+            msg += f" ({n['days_logged']} days logged)\n"
+
+        if summary["strength"]:
+            msg += "\n💪 Strength Progress:\n"
+            for key, data in summary["strength"].items():
+                arrow = "📈" if data["gain"] > 0 else "➡️"
+                msg += f"  {arrow} {data['name']}: {data['start_weight']}kg → {data['end_weight']}kg (+{data['gain']}kg)\n"
+
+        msg += f"\n🧴 Skincare: AM {sk['morning_pct']}% | PM {sk['night_pct']}%\n"
+        msg += "\n📸 Remember to take progress photos!"
+
+        return msg
+
+    except Exception as e:
+        logger.error(f"Block summary error: {e}")
+        return f"⚠️ Error generating block summary: {e}"
+
+
+def process_create_block(action_data: dict) -> str:
+    """Create a new training block."""
+    try:
+        block = create_training_block(
+            name=action_data["name"],
+            start_date=action_data["start_date"],
+            end_date=action_data["end_date"],
+            phase=action_data["phase"],
+            calorie_target=action_data.get("calorie_target"),
+            protein_target=action_data.get("protein_target"),
+            weight_start=action_data.get("weight_start"),
+            weight_target=action_data.get("weight_target"),
+            cycling_days=action_data.get("cycling_days"),
+            notes=action_data.get("notes"),
+        )
+        msg = f"🏗️ Training block created: {block['name']}\n"
+        msg += f"  Phase: {block['phase']} | {block['start_date']} → {block['end_date']}\n"
+        if block.get("calorie_target"):
+            msg += f"  Targets: {block['calorie_target']} cal / {block.get('protein_target', '?')}g protein\n"
+        if block.get("weight_start"):
+            msg += f"  Weight: {block['weight_start']}kg → {block.get('weight_target', '?')}kg\n"
+        return msg
+
+    except Exception as e:
+        logger.error(f"Create block error: {e}")
+        return f"⚠️ Error creating block: {e}"
+
+
+def process_progress_photos(action_data: dict) -> str:
+    """Log that progress photos were taken."""
+    try:
+        date = action_data.get("date", datetime.now().strftime("%Y-%m-%d"))
+        notes = action_data.get("notes")
+        log_progress_photos(date=date, notes=notes)
+        return f"📸 Progress photos logged for {date}."
+    except Exception as e:
+        logger.error(f"Progress photos error: {e}")
+        return f"⚠️ Error logging photos: {e}"

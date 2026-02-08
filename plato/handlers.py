@@ -10,10 +10,11 @@ from plato.config import ALLOWED_USER_ID, anthropic_client, logger
 from plato.db import (
     save_conversation, clear_conversations, get_active_projects,
     get_unresolved_patterns, get_planned_events_for_date,
-    get_weekly_adherence, get_pending_plan
+    get_weekly_adherence, get_pending_plan, get_all_lift_latest,
+    get_current_block, get_recent_training, MAIN_LIFTS,
 )
 from plato.prompts import build_system_prompt, build_messages_with_history
-from plato.actions import process_action, process_approve_plan, process_import_csv
+from plato.actions import process_action, process_approve_plan, process_import_csv, process_import_mfp
 from plato_calendar import get_schedule_prompt
 
 
@@ -45,6 +46,21 @@ def detect_plan_week(user_message: str) -> str | None:
     return None
 
 
+# ============== MFP DETECTION ==============
+
+MFP_MARKERS = [
+    "Printable Diary for",
+    "FOODSCaloriesCarbsFat",
+    "EXERCISESCaloriesminutes",
+    "MyFitnessPal",
+]
+
+
+def is_mfp_diary(text: str) -> bool:
+    """Detect if pasted text is an MFP printable diary."""
+    return any(marker in text for marker in MFP_MARKERS)
+
+
 # ============== MESSAGE HANDLER ==============
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -56,7 +72,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     user_message = update.message.text
-    logger.info(f"Received: {user_message}")
+    logger.info(f"Received: {user_message[:100]}...")
 
     # Save user message to history
     save_conversation("user", user_message)
@@ -65,6 +81,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     msg_lower = user_message.lower().strip()
     if msg_lower in ["approve", "approved", "looks good", "push it", "send it", "go ahead", "lgtm"]:
         result = process_approve_plan()
+        save_conversation("assistant", result)
+        await update.message.reply_text(result)
+        return
+
+    # Check if this is pasted MFP diary data
+    if is_mfp_diary(user_message):
+        await update.message.reply_text("🍽️ MFP diary detected, parsing...")
+        result = process_import_mfp(user_message)
+        save_conversation("user", "[Pasted MFP diary data]")
         save_conversation("assistant", result)
         await update.message.reply_text(result)
         return
@@ -146,7 +171,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if patterns:
         msg += f"\n⚠️ {len(patterns)} unresolved patterns"
 
-    # Add today's schedule
+    # Today's schedule
     try:
         today = datetime.now().strftime("%Y-%m-%d")
         today_events = get_planned_events_for_date(today)
@@ -158,7 +183,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    # Add weekly adherence
+    # Weekly adherence
     try:
         today_dt = datetime.now()
         week_start = (today_dt - timedelta(days=today_dt.weekday())).strftime("%Y-%m-%d")
@@ -167,6 +192,25 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             msg += f"\n📈 This week: {stats['adherence_pct']}% adherence ({stats['completed']}/{stats['total']} blocks)"
             if stats["audrey_time"] > 0:
                 msg += f"\n💕 Audrey time: {stats['audrey_time']} blocks"
+    except Exception:
+        pass
+
+    # Fitness snapshot
+    try:
+        sessions = get_recent_training(days=7)
+        completed = [s for s in sessions if s["completed"]]
+        if sessions:
+            msg += f"\n\n💪 Training: {len(completed)}/4 sessions this week"
+
+        block = get_current_block()
+        if block:
+            msg += f"\n🏗️ Block: {block['name']} ({block['phase']})"
+
+        lifts = get_all_lift_latest()
+        pending = [k for k, v in lifts.items() if v.get("hit_target") and not v.get("confirmed")]
+        if pending:
+            names = [MAIN_LIFTS[k]["name"] for k in pending]
+            msg += f"\n📈 Pending progressions: {', '.join(names)}"
     except Exception:
         pass
 
@@ -183,40 +227,54 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle uploaded documents (CSV files for finance import)."""
+    """Handle uploaded documents (CSV for finance, text for MFP)."""
     if update.effective_user.id != ALLOWED_USER_ID:
         return
 
     document = update.message.document
     filename = document.file_name.lower()
 
-    if not filename.endswith(".csv"):
-        await update.message.reply_text("I only accept CSV files for now. Export your statement as CSV from Revolut or AIB.")
-        return
-
     # Download file
     file = await document.get_file()
     file_bytes = await file.download_as_bytearray()
-    csv_content = file_bytes.decode("utf-8")
 
-    # Detect source from filename or content
-    if "account-statement" in filename or "revolut" in filename:
-        source = "revolut"
-    elif "transaction_export" in filename or "aib" in filename:
-        source = "aib"
-    elif "Posted Account" in csv_content[:200]:
-        source = "aib"
-    elif "Started Date" in csv_content[:200]:
-        source = "revolut"
-    else:
-        await update.message.reply_text("Couldn't detect if this is Revolut or AIB. Please rename the file to include 'revolut' or 'aib' in the filename.")
+    try:
+        file_content = file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        await update.message.reply_text("⚠️ Couldn't read this file. Please upload a CSV or text file.")
         return
 
-    await update.message.reply_text(f"📄 Processing {source.upper()} CSV...")
+    # Detect file type
+    if filename.endswith(".csv"):
+        # Finance CSV
+        if "account-statement" in filename or "revolut" in filename:
+            source = "revolut"
+        elif "transaction_export" in filename or "aib" in filename:
+            source = "aib"
+        elif "Posted Account" in file_content[:200]:
+            source = "aib"
+        elif "Started Date" in file_content[:200]:
+            source = "revolut"
+        else:
+            await update.message.reply_text("Couldn't detect if this is Revolut or AIB. Please rename the file to include 'revolut' or 'aib' in the filename.")
+            return
 
-    result = process_import_csv(csv_content, source)
+        await update.message.reply_text(f"📄 Processing {source.upper()} CSV...")
+        result = process_import_csv(file_content, source)
+        save_conversation("user", f"[Uploaded {source} CSV: {document.file_name}]")
+        save_conversation("assistant", result)
+        await update.message.reply_text(result)
 
-    save_conversation("user", f"[Uploaded {source} CSV: {document.file_name}]")
-    save_conversation("assistant", result)
+    elif filename.endswith(".txt") or is_mfp_diary(file_content):
+        # MFP diary text file
+        if is_mfp_diary(file_content):
+            await update.message.reply_text("🍽️ MFP diary detected, parsing...")
+            result = process_import_mfp(file_content)
+            save_conversation("user", f"[Uploaded MFP diary: {document.file_name}]")
+            save_conversation("assistant", result)
+            await update.message.reply_text(result)
+        else:
+            await update.message.reply_text("I can accept finance CSVs (Revolut/AIB) or MFP diary exports. This doesn't look like either.")
 
-    await update.message.reply_text(result)
+    else:
+        await update.message.reply_text("I accept CSV files (Revolut/AIB) or MFP diary text files. Upload one of those!")

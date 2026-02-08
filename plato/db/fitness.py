@@ -1,27 +1,540 @@
+"""
+Comprehensive fitness tracking database operations.
+Handles daily logs, training sessions, main lift progression,
+nutrition parsing (MFP), training blocks, and weekly/block summaries.
+"""
+
+import re
 from datetime import datetime, timedelta
-from plato.config import supabase
+from plato.config import supabase, logger
 
 
-def log_fitness_exercises(exercises: list[dict]) -> int:
-    """Log multiple exercises from a gym session. Returns count logged."""
-    count = 0
-    today = datetime.now().strftime("%Y-%m-%d")
+# ============== MAIN LIFT CONFIG ==============
+
+MAIN_LIFTS = {
+    "incline_bench": {"name": "Incline Barbell Press", "rep_range": (6, 8), "increment": 2.5},
+    "barbell_row": {"name": "Barbell Row", "rep_range": (6, 8), "increment": 2.5},
+    "squat": {"name": "Back Squat", "rep_range": (8, 10), "increment": 2.5},
+    "ohp": {"name": "Overhead Barbell Press", "rep_range": (6, 8), "increment": 2.5},
+}
+
+LIFT_ALIASES = {
+    "incline bench": "incline_bench", "incline barbell": "incline_bench",
+    "incline press": "incline_bench", "incline": "incline_bench",
+    "barbell row": "barbell_row", "row": "barbell_row", "bent over row": "barbell_row",
+    "squat": "squat", "back squat": "squat", "squats": "squat",
+    "ohp": "ohp", "overhead press": "ohp", "shoulder press": "ohp",
+    "military press": "ohp", "overhead barbell press": "ohp",
+}
+
+SESSION_TYPES = {
+    "push": "Push", "chest": "Push",
+    "legs": "Legs", "leg": "Legs",
+    "upper": "Upper Hypertrophy", "upper hypertrophy": "Upper Hypertrophy",
+    "shoulders": "Shoulders + Arms", "arms": "Shoulders + Arms",
+    "shoulders + arms": "Shoulders + Arms", "shoulder": "Shoulders + Arms",
+}
+
+
+# ============== DAILY LOGS ==============
+
+def log_daily(date: str = None, **kwargs) -> dict:
+    """Log or update a daily entry. Upserts by date."""
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    entry = {"date": date}
+    valid_fields = [
+        "weight_kg", "steps", "cycling_scheduled", "cycling_completed",
+        "cycling_notes", "skincare_am", "skincare_pm", "skincare_notes",
+        "urticaria_severity", "breakout_severity", "breakout_location",
+        "health_notes", "sleep_hours", "block_id"
+    ]
+    for field in valid_fields:
+        if field in kwargs and kwargs[field] is not None:
+            entry[field] = kwargs[field]
+
+    result = supabase.table("daily_logs").upsert(
+        entry, on_conflict="date"
+    ).execute()
+    return result.data[0] if result.data else entry
+
+
+def get_daily_log(date: str) -> dict | None:
+    """Get daily log for a specific date."""
+    result = supabase.table("daily_logs").select("*").eq("date", date).execute()
+    return result.data[0] if result.data else None
+
+
+def get_daily_logs_range(start_date: str, end_date: str) -> list[dict]:
+    """Get daily logs for a date range."""
+    result = supabase.table("daily_logs").select("*").gte(
+        "date", start_date
+    ).lte("date", end_date).order("date").execute()
+    return result.data
+
+
+def get_weight_history(days: int = 30) -> list[dict]:
+    """Get weight entries for the last N days."""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    result = supabase.table("daily_logs").select(
+        "date, weight_kg"
+    ).gte("date", since).not_.is_("weight_kg", "null").order("date").execute()
+    return result.data
+
+
+# ============== TRAINING SESSIONS ==============
+
+def log_training_session(
+    session_type: str,
+    exercises: list[dict],
+    date: str = None,
+    feedback: str = None,
+    duration_mins: int = None
+) -> dict:
+    """Log a complete training session with exercises."""
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    normalized = SESSION_TYPES.get(session_type.lower(), session_type)
+    block_id = _get_current_block_id(date)
+
+    session = supabase.table("training_sessions").insert({
+        "date": date,
+        "session_type": normalized,
+        "completed": True,
+        "feedback": feedback,
+        "duration_mins": duration_mins,
+        "block_id": block_id,
+    }).execute()
+
+    session_id = session.data[0]["id"]
+    main_lift_results = []
+
     for ex in exercises:
-        entry = {
-            "session_date": ex.get("date", today),
-            "exercise_name": ex["exercise"],
+        exercise_name = ex["exercise"]
+        is_main = _is_main_lift(exercise_name)
+
+        supabase.table("training_exercises").insert({
+            "session_id": session_id,
+            "exercise_name": exercise_name,
             "sets": ex.get("sets"),
             "reps": ex.get("reps"),
             "weight_kg": ex.get("weight_kg"),
-            "notes": ex.get("notes")
+            "is_main_lift": is_main,
+            "notes": ex.get("notes"),
+        }).execute()
+
+        if is_main and ex.get("weight_kg") and ex.get("sets") and ex.get("reps"):
+            lift_key = _get_lift_key(exercise_name)
+            if lift_key:
+                prog = _track_main_lift(
+                    date=date, lift_key=lift_key,
+                    weight=ex["weight_kg"], sets=ex["sets"], reps=ex["reps"],
+                )
+                if prog:
+                    main_lift_results.append(prog)
+
+    return {
+        "session": session.data[0],
+        "exercise_count": len(exercises),
+        "main_lift_progressions": main_lift_results,
+    }
+
+
+def log_missed_session(session_type: str, date: str = None, reason: str = None) -> dict:
+    """Log a missed/skipped training session."""
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    normalized = SESSION_TYPES.get(session_type.lower(), session_type)
+    block_id = _get_current_block_id(date)
+    result = supabase.table("training_sessions").insert({
+        "date": date, "session_type": normalized,
+        "completed": False, "feedback": reason, "block_id": block_id,
+    }).execute()
+    return result.data[0]
+
+
+def get_training_sessions_range(start_date: str, end_date: str) -> list[dict]:
+    """Get training sessions for a date range with exercises."""
+    sessions = supabase.table("training_sessions").select("*").gte(
+        "date", start_date
+    ).lte("date", end_date).order("date").execute()
+
+    for session in sessions.data:
+        exercises = supabase.table("training_exercises").select("*").eq(
+            "session_id", session["id"]
+        ).execute()
+        session["exercises"] = exercises.data
+
+    return sessions.data
+
+
+def get_recent_training(days: int = 7) -> list[dict]:
+    """Get training sessions from last N days."""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
+    return get_training_sessions_range(since, today)
+
+
+# ============== MAIN LIFT PROGRESSION ==============
+
+def _is_main_lift(exercise_name: str) -> bool:
+    return _get_lift_key(exercise_name) is not None
+
+
+def _get_lift_key(exercise_name: str) -> str | None:
+    name_lower = exercise_name.lower().strip()
+    if name_lower in LIFT_ALIASES:
+        return LIFT_ALIASES[name_lower]
+    for alias, key in LIFT_ALIASES.items():
+        if alias in name_lower or name_lower in alias:
+            return key
+    return None
+
+
+def _track_main_lift(date: str, lift_key: str, weight: float, sets: int, reps: int) -> dict | None:
+    config = MAIN_LIFTS[lift_key]
+    target_top = config["rep_range"][1]
+    hit_target = reps >= target_top and sets >= 4
+
+    next_weight = weight + config["increment"] if hit_target else None
+
+    entry = {
+        "date": date, "lift_name": lift_key,
+        "weight_kg": weight, "sets": sets, "reps": reps,
+        "target_reps": target_top, "hit_target": hit_target,
+        "next_weight_kg": next_weight, "confirmed": False,
+    }
+
+    try:
+        supabase.table("main_lift_progress").insert(entry).execute()
+    except Exception as e:
+        logger.error(f"Failed to track main lift: {e}")
+        return None
+
+    return {
+        "lift": config["name"], "lift_key": lift_key,
+        "weight": weight, "sets": sets, "reps": reps,
+        "hit_target": hit_target, "next_weight": next_weight,
+    }
+
+
+def get_lift_history(lift_key: str, limit: int = 12) -> list[dict]:
+    result = supabase.table("main_lift_progress").select("*").eq(
+        "lift_name", lift_key
+    ).order("date", desc=True).limit(limit).execute()
+    return result.data
+
+
+def get_all_lift_latest() -> dict:
+    latest = {}
+    for key in MAIN_LIFTS:
+        result = supabase.table("main_lift_progress").select("*").eq(
+            "lift_name", key
+        ).order("date", desc=True).limit(1).execute()
+        if result.data:
+            latest[key] = result.data[0]
+    return latest
+
+
+def confirm_progression(lift_key: str) -> str:
+    result = supabase.table("main_lift_progress").select("*").eq(
+        "lift_name", lift_key
+    ).eq("hit_target", True).eq("confirmed", False).order(
+        "date", desc=True
+    ).limit(1).execute()
+
+    if not result.data:
+        return f"No pending progression for {lift_key}."
+
+    entry = result.data[0]
+    supabase.table("main_lift_progress").update(
+        {"confirmed": True}
+    ).eq("id", entry["id"]).execute()
+
+    return f"✅ Confirmed: {MAIN_LIFTS[lift_key]['name']} → {entry['next_weight_kg']}kg next session."
+
+
+# ============== NUTRITION LOGS ==============
+
+def parse_mfp_diary(text: str) -> list[dict]:
+    """Parse MyFitnessPal printable diary text into daily nutrition entries."""
+    entries = []
+    date_pattern = r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4})'
+    sections = re.split(date_pattern, text)
+
+    i = 1
+    while i < len(sections) - 1:
+        date_str = sections[i].strip()
+        content = sections[i + 1]
+        i += 2
+
+        try:
+            date_obj = datetime.strptime(date_str, "%b %d, %Y")
+            date = date_obj.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+
+        # Food TOTALS format: TOTALS{cal}{carbs}g{fat}g{protein}g...
+        # Calories are 3-4 digits (500-9999), carbs follow with 'g' suffix
+        # Exercise TOTALS have no 'g' markers so won't match
+        totals_match = re.search(
+            r'TOTALS(\d{3,4})(\d+)g(\d+)g(\d+)g',
+            content
+        )
+
+        if totals_match:
+            calories = int(totals_match.group(1))
+            carbs = int(totals_match.group(2))
+            fat = int(totals_match.group(3))
+            protein = int(totals_match.group(4))
+
+            meals = sum(1 for m in ["Breakfast", "Lunch", "Dinner", "Snacks"] if m in content)
+
+            entries.append({
+                "date": date,
+                "calories": calories,
+                "carbs_g": carbs,
+                "fat_g": fat,
+                "protein_g": protein,
+                "meals_logged": meals,
+            })
+
+    return entries
+
+
+def import_nutrition(entries: list[dict]) -> dict:
+    imported = 0
+    skipped = 0
+    for entry in entries:
+        try:
+            supabase.table("nutrition_logs").upsert(entry, on_conflict="date").execute()
+            imported += 1
+        except Exception as e:
+            logger.error(f"Failed to import nutrition for {entry.get('date')}: {e}")
+            skipped += 1
+    return {"imported": imported, "skipped": skipped}
+
+
+def get_nutrition_range(start_date: str, end_date: str) -> list[dict]:
+    result = supabase.table("nutrition_logs").select("*").gte(
+        "date", start_date
+    ).lte("date", end_date).order("date").execute()
+    return result.data
+
+
+def get_recent_nutrition(days: int = 7) -> list[dict]:
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
+    return get_nutrition_range(since, today)
+
+
+# ============== TRAINING BLOCKS ==============
+
+def create_training_block(
+    name: str, start_date: str, end_date: str, phase: str,
+    calorie_target: int = None, protein_target: int = None,
+    weight_start: float = None, weight_target: float = None,
+    cycling_days: list[str] = None, notes: str = None
+) -> dict:
+    result = supabase.table("training_blocks").insert({
+        "name": name, "start_date": start_date, "end_date": end_date,
+        "phase": phase, "calorie_target": calorie_target,
+        "protein_target": protein_target, "weight_start": weight_start,
+        "weight_target": weight_target, "cycling_days": cycling_days, "notes": notes,
+    }).execute()
+    return result.data[0]
+
+
+def get_current_block(date: str = None) -> dict | None:
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    result = supabase.table("training_blocks").select("*").lte(
+        "start_date", date
+    ).gte("end_date", date).limit(1).execute()
+    return result.data[0] if result.data else None
+
+
+def _get_current_block_id(date: str) -> str | None:
+    block = get_current_block(date)
+    return block["id"] if block else None
+
+
+# ============== SUMMARIES ==============
+
+def generate_weekly_summary(week_start: str = None) -> dict:
+    if not week_start:
+        today = datetime.now()
+        week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+
+    start = datetime.strptime(week_start, "%Y-%m-%d")
+    end = start + timedelta(days=6)
+    end_str = end.strftime("%Y-%m-%d")
+
+    sessions = get_training_sessions_range(week_start, end_str)
+    completed = [s for s in sessions if s["completed"]]
+    missed = [s for s in sessions if not s["completed"]]
+
+    daily = get_daily_logs_range(week_start, end_str)
+    weights = [d["weight_kg"] for d in daily if d.get("weight_kg")]
+
+    skincare_am = sum(1 for d in daily if d.get("skincare_am", True))
+    skincare_pm = sum(1 for d in daily if d.get("skincare_pm", True))
+    days_count = len(daily) or 7
+
+    cycling_scheduled = sum(1 for d in daily if d.get("cycling_scheduled"))
+    cycling_completed = sum(1 for d in daily if d.get("cycling_scheduled") and d.get("cycling_completed"))
+
+    nutrition = get_nutrition_range(week_start, end_str)
+    avg_cals = round(sum(n["calories"] for n in nutrition) / len(nutrition)) if nutrition else None
+    avg_protein = round(sum(n["protein_g"] for n in nutrition) / len(nutrition)) if nutrition else None
+    low_cal_days = sum(1 for n in nutrition if n["calories"] < 2800) if nutrition else None
+
+    lift_latest = get_all_lift_latest()
+    lift_progress = []
+    for key, data in lift_latest.items():
+        config = MAIN_LIFTS[key]
+        entry = {
+            "name": config["name"], "weight": data["weight_kg"],
+            "sets": data["sets"], "reps": data["reps"],
+            "hit_target": data["hit_target"],
         }
-        supabase.table("fitness_logs").insert(entry).execute()
-        count += 1
-    return count
+        if data["hit_target"] and data.get("next_weight_kg"):
+            entry["progression"] = f"→ Moving to {data['next_weight_kg']}kg"
+        lift_progress.append(entry)
+
+    urticaria_days = [d for d in daily if d.get("urticaria_severity")]
+    breakout_days = [d for d in daily if d.get("breakout_severity")]
+
+    steps_entries = [d for d in daily if d.get("steps")]
+    avg_steps = round(sum(d["steps"] for d in steps_entries) / len(steps_entries)) if steps_entries else None
+
+    return {
+        "week": f"{week_start} to {end_str}",
+        "training": {
+            "completed": len(completed), "total": len(sessions), "target": 4,
+            "sessions": [{"type": s["session_type"], "date": s["date"]} for s in completed],
+            "missed": [{"type": s["session_type"], "reason": s.get("feedback")} for s in missed],
+        },
+        "weight": {
+            "start": weights[0] if weights else None,
+            "end": weights[-1] if weights else None,
+            "change": round(weights[-1] - weights[0], 1) if len(weights) >= 2 else None,
+        },
+        "nutrition": {
+            "avg_calories": avg_cals, "avg_protein": avg_protein,
+            "days_logged": len(nutrition), "low_cal_days": low_cal_days,
+        },
+        "main_lifts": lift_progress,
+        "cycling": {"completed": cycling_completed, "scheduled": cycling_scheduled},
+        "skincare": {"morning": skincare_am, "night": skincare_pm, "total_days": days_count},
+        "health": {"urticaria_days": len(urticaria_days), "breakout_days": len(breakout_days)},
+        "steps": {"avg": avg_steps},
+    }
+
+
+def generate_block_summary(block_id: str = None) -> dict:
+    if block_id:
+        result = supabase.table("training_blocks").select("*").eq("id", block_id).execute()
+        block = result.data[0] if result.data else None
+    else:
+        block = get_current_block()
+
+    if not block:
+        return {"error": "No active training block found."}
+
+    start = block["start_date"]
+    end = block["end_date"]
+
+    sessions = get_training_sessions_range(start, end)
+    daily = get_daily_logs_range(start, end)
+    nutrition = get_nutrition_range(start, end)
+
+    completed = [s for s in sessions if s["completed"]]
+    weights = [d["weight_kg"] for d in daily if d.get("weight_kg")]
+
+    strength = {}
+    for key in MAIN_LIFTS:
+        history = supabase.table("main_lift_progress").select("*").eq(
+            "lift_name", key
+        ).gte("date", start).lte("date", end).order("date").execute()
+        if history.data:
+            first = history.data[0]
+            last = history.data[-1]
+            strength[key] = {
+                "name": MAIN_LIFTS[key]["name"],
+                "start_weight": first["weight_kg"],
+                "end_weight": last["weight_kg"],
+                "gain": round(last["weight_kg"] - first["weight_kg"], 1),
+            }
+
+    skincare_am = sum(1 for d in daily if d.get("skincare_am", True))
+    skincare_pm = sum(1 for d in daily if d.get("skincare_pm", True))
+    total_days = len(daily) or 28
+
+    return {
+        "block": block["name"], "phase": block["phase"],
+        "dates": f"{start} to {end}",
+        "training": {
+            "total_sessions": len(completed), "target_sessions": 16,
+            "adherence_pct": round(len(completed) / 16 * 100, 1),
+        },
+        "weight": {
+            "start": weights[0] if weights else block.get("weight_start"),
+            "end": weights[-1] if weights else None,
+            "change": round(weights[-1] - weights[0], 1) if len(weights) >= 2 else None,
+            "target": block.get("weight_target"),
+        },
+        "nutrition": {
+            "avg_calories": round(sum(n["calories"] for n in nutrition) / len(nutrition)) if nutrition else None,
+            "avg_protein": round(sum(n["protein_g"] for n in nutrition) / len(nutrition)) if nutrition else None,
+            "days_logged": len(nutrition),
+            "target_calories": block.get("calorie_target"),
+            "target_protein": block.get("protein_target"),
+        },
+        "strength": strength,
+        "skincare": {
+            "morning_pct": round(skincare_am / total_days * 100, 1),
+            "night_pct": round(skincare_pm / total_days * 100, 1),
+        },
+    }
+
+
+# ============== PROGRESS PHOTOS ==============
+
+def log_progress_photos(date: str = None, notes: str = None) -> dict:
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    block_id = _get_current_block_id(date)
+    result = supabase.table("progress_photos").insert({
+        "date": date, "block_id": block_id, "notes": notes,
+    }).execute()
+    return result.data[0]
+
+
+# ============== LEGACY COMPATIBILITY ==============
+
+def log_fitness_exercises(exercises: list[dict]) -> int:
+    """Legacy compatibility wrapper."""
+    if not exercises:
+        return 0
+    result = log_training_session(session_type="General", exercises=exercises)
+    return result["exercise_count"]
 
 
 def get_recent_fitness(days: int = 7) -> list[dict]:
-    """Fetch fitness logs from the last N days."""
-    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    result = supabase.table("fitness_logs").select("*").gte("session_date", since).order("session_date", desc=True).execute()
-    return result.data
+    """Legacy compatibility wrapper."""
+    sessions = get_recent_training(days)
+    flat = []
+    for s in sessions:
+        for ex in s.get("exercises", []):
+            flat.append({
+                "session_date": s["date"],
+                "exercise_name": ex["exercise_name"],
+                "sets": ex.get("sets"),
+                "reps": ex.get("reps"),
+                "weight_kg": ex.get("weight_kg"),
+                "notes": ex.get("notes"),
+            })
+    return flat
