@@ -20,6 +20,7 @@ from plato.db import (
     log_progress_photos, get_all_lift_latest, MAIN_LIFTS,
     add_fitness_goal, get_fitness_goals, achieve_fitness_goal,
     revise_fitness_goal, generate_block_workouts,
+    calculate_block_dates, get_phase_for_month, get_nutrition_for_phase, plan_next_block,
 )
 from plato_calendar import (
     get_calendar_service, clear_plato_events, create_weekly_events,
@@ -101,6 +102,8 @@ def process_action(action_data: dict, raw_message: str) -> str | None:
             return process_block_summary(action_data)
         elif action == "create_block":
             return process_create_block(action_data)
+        elif action == "plan_next_block":
+            return process_plan_next_block(action_data)
         elif action == "progress_photos":
             return process_progress_photos(action_data)
         elif action == "add_fitness_goal":
@@ -750,31 +753,69 @@ def process_create_block(action_data: dict) -> str:
             msg += f"  Week {week}:\n"
             msg += "\n".join(sessions) + "\n"
 
-        # Push to Google Calendar
-        try:
-            service = get_calendar_service()
-            cal_created = 0
-            for event in workout_result["calendar_events"]:
-                create_event(
-                    service,
-                    date_str=event["date"],
-                    start_time=event["start"],
-                    end_time=event["end"],
-                    title=event["title"],
-                    description=event.get("description"),
-                    color_id=COLOR_MAP.get("exercise"),
-                )
-                cal_created += 1
-            msg += f"\n📅 Added {cal_created} sessions to Google Calendar."
-        except Exception as e:
-            logger.error(f"Calendar push error: {e}")
-            msg += f"\n⚠️ Couldn't push to calendar: {e}"
-
         return msg
 
     except Exception as e:
         logger.error(f"Create block error: {e}")
         return f"⚠️ Error creating block: {e}"
+
+
+def process_plan_next_block(action_data: dict) -> str:
+    """Auto-plan next month's block using the bulk/cut timeline."""
+    try:
+        year = action_data["year"]
+        month = action_data["month"]
+        weight_start = action_data.get("weight_start")
+
+        plan = plan_next_block(year, month, weight_start)
+
+        # Create the block
+        block = create_training_block(
+            name=plan["name"],
+            start_date=plan["start_date"],
+            end_date=plan["end_date"],
+            phase=plan["phase"],
+            calorie_target=plan["calorie_target"],
+            protein_target=plan["protein_target"],
+            weight_start=weight_start,
+        )
+
+        # Generate workouts
+        workout_result = generate_block_workouts(
+            block_id=block["id"],
+            start_date=plan["start_date"],
+            end_date=plan["end_date"],
+        )
+
+        phase_emoji = {"bulk": "📈", "mini_cut": "✂️", "final_cut": "🔪"}.get(plan["phase"], "📋")
+
+        msg = f"{phase_emoji} {plan['name']} block planned!\n"
+        msg += f"  Phase: {plan['phase'].upper()}\n"
+        msg += f"  Dates: {plan['start_date']} → {plan['end_date']}\n"
+        msg += f"  Nutrition: {plan['calorie_target']} cal / {plan['protein_target']}g protein\n"
+        if weight_start:
+            msg += f"  Starting weight: {weight_start}kg\n"
+        msg += f"\n📅 {workout_result['sessions_created']} sessions generated:\n"
+
+        by_week = {}
+        for s in workout_result["sessions"]:
+            from datetime import datetime as dt
+            d = dt.strptime(s["date"], "%Y-%m-%d")
+            week_num = (d - dt.strptime(plan["start_date"], "%Y-%m-%d")).days // 7 + 1
+            if week_num not in by_week:
+                by_week[week_num] = []
+            day_name = d.strftime("%a %b %d")
+            by_week[week_num].append(f"    {day_name}: {s['session_type']}")
+
+        for week, sessions in sorted(by_week.items()):
+            msg += f"  Week {week}:\n"
+            msg += "\n".join(sessions) + "\n"
+
+        return msg
+
+    except Exception as e:
+        logger.error(f"Plan next block error: {e}")
+        return f"⚠️ Error planning block: {e}"
 
 
 def process_progress_photos(action_data: dict) -> str:

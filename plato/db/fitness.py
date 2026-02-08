@@ -615,25 +615,94 @@ WEEKLY_SCHEDULE = [
     (5, "Shoulders + Arms"),
 ]
 
-# Default session times
-SESSION_TIMES = {
-    "Push": ("06:30", "07:45"),
-    "Legs": ("06:30", "07:30"),
-    "Upper Hypertrophy": ("06:30", "07:45"),
-    "Shoulders + Arms": ("09:00", "10:15"),
+# Bulk/cut phase timeline — month: phase
+# 2026: Feb-May bulk, June mini-cut, Jul-Oct bulk, Nov mini-cut
+# 2027: Jan-May bulk, June mini-cut, Jul-Dec bulk
+# 2028: Jan-Jun final cut
+PHASE_TIMELINE = {
+    (2026, 2): "bulk", (2026, 3): "bulk", (2026, 4): "bulk", (2026, 5): "bulk",
+    (2026, 6): "mini_cut",
+    (2026, 7): "bulk", (2026, 8): "bulk", (2026, 9): "bulk", (2026, 10): "bulk",
+    (2026, 11): "mini_cut", (2026, 12): "bulk",
+    (2027, 1): "bulk", (2027, 2): "bulk", (2027, 3): "bulk", (2027, 4): "bulk", (2027, 5): "bulk",
+    (2027, 6): "mini_cut",
+    (2027, 7): "bulk", (2027, 8): "bulk", (2027, 9): "bulk", (2027, 10): "bulk",
+    (2027, 11): "bulk", (2027, 12): "bulk",
+    (2028, 1): "final_cut", (2028, 2): "final_cut", (2028, 3): "final_cut",
+    (2028, 4): "final_cut", (2028, 5): "final_cut", (2028, 6): "final_cut",
 }
+
+PHASE_NUTRITION = {
+    "bulk": {"calories": 3000, "protein": 170},
+    "mini_cut": {"calories": 2450, "protein": 180},
+    "final_cut": {"calories": 2300, "protein": 185},
+}
+
+
+def calculate_block_dates(year: int, month: int) -> tuple[str, str]:
+    """Calculate block start (first Monday) and end (last Sunday that includes month days).
+    Block = first Monday of the month → the Sunday after the last day of the month."""
+    import calendar
+
+    # First Monday: find first day, advance to Monday
+    first_day = datetime(year, month, 1)
+    days_until_monday = (7 - first_day.weekday()) % 7
+    if first_day.weekday() == 0:
+        block_start = first_day  # Already Monday
+    else:
+        block_start = first_day + timedelta(days=days_until_monday)
+
+    # Last day of month
+    last_day_num = calendar.monthrange(year, month)[1]
+    last_day = datetime(year, month, last_day_num)
+
+    # End on Sunday: find the Sunday on or after the last day
+    days_until_sunday = (6 - last_day.weekday()) % 7
+    block_end = last_day + timedelta(days=days_until_sunday)
+
+    return block_start.strftime("%Y-%m-%d"), block_end.strftime("%Y-%m-%d")
+
+
+def get_phase_for_month(year: int, month: int) -> str:
+    """Get the planned phase for a given month."""
+    return PHASE_TIMELINE.get((year, month), "bulk")
+
+
+def get_nutrition_for_phase(phase: str) -> dict:
+    """Get calorie/protein targets for a phase."""
+    return PHASE_NUTRITION.get(phase, PHASE_NUTRITION["bulk"])
+
+
+def plan_next_block(year: int, month: int, weight_start: float = None) -> dict:
+    """Auto-plan next block: calculates dates, phase, nutrition targets.
+    Returns block config ready for create_training_block."""
+    import calendar
+
+    start_date, end_date = calculate_block_dates(year, month)
+    phase = get_phase_for_month(year, month)
+    nutrition = get_nutrition_for_phase(phase)
+    month_name = calendar.month_name[month]
+
+    return {
+        "name": f"{month_name} {year}",
+        "start_date": start_date,
+        "end_date": end_date,
+        "phase": phase,
+        "calorie_target": nutrition["calories"],
+        "protein_target": nutrition["protein"],
+        "weight_start": weight_start,
+    }
 
 
 def generate_block_workouts(block_id: str, start_date: str, end_date: str) -> dict:
     """Generate all training sessions for a block with exercises from templates.
-    Returns dict with sessions created and calendar events."""
+    Sessions only — no calendar events (scheduling is separate)."""
 
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
 
     templates = get_all_templates()
     sessions_created = []
-    calendar_events = []
 
     current = start
     while current <= end:
@@ -642,9 +711,7 @@ def generate_block_workouts(block_id: str, start_date: str, end_date: str) -> di
         for sched_day, session_type in WEEKLY_SCHEDULE:
             if weekday == sched_day and session_type in templates:
                 date_str = current.strftime("%Y-%m-%d")
-                times = SESSION_TIMES.get(session_type, ("06:30", "07:45"))
 
-                # Create the training session (scheduled but not yet completed)
                 session = supabase.table("training_sessions").insert({
                     "date": date_str,
                     "session_type": session_type,
@@ -655,13 +722,12 @@ def generate_block_workouts(block_id: str, start_date: str, end_date: str) -> di
 
                 session_id = session.data[0]["id"]
 
-                # Pre-populate exercises from template
                 for tmpl in templates[session_type]:
                     supabase.table("training_exercises").insert({
                         "session_id": session_id,
                         "exercise_name": tmpl["exercise_name"],
                         "sets": tmpl["sets"],
-                        "reps": None,  # Will be filled when logged
+                        "reps": None,
                         "weight_kg": None,
                         "is_main_lift": tmpl["is_main_lift"],
                         "notes": f"Target: {tmpl['rep_range']} reps",
@@ -674,22 +740,11 @@ def generate_block_workouts(block_id: str, start_date: str, end_date: str) -> di
                     "exercises": len(templates[session_type]),
                 })
 
-                # Build calendar event
-                calendar_events.append({
-                    "date": date_str,
-                    "start": times[0],
-                    "end": times[1],
-                    "title": f"🏋️ {session_type}",
-                    "category": "exercise",
-                    "description": ", ".join(t["exercise_name"] for t in templates[session_type]),
-                })
-
         current += timedelta(days=1)
 
     return {
         "sessions_created": len(sessions_created),
         "sessions": sessions_created,
-        "calendar_events": calendar_events,
     }
 
 

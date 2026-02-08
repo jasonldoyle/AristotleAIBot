@@ -12,7 +12,7 @@ from plato.db import (
     # Fitness
     get_current_block, get_all_lift_latest, get_recent_nutrition,
     get_weight_history, get_recent_training, MAIN_LIFTS,
-    get_fitness_goals,
+    get_fitness_goals, get_phase_for_month,
 )
 
 
@@ -188,7 +188,7 @@ Covers: training, weight, nutrition, main lifts, cycling, skincare, health.
 Generate at the end of each training block (every 4 weeks). Compares start vs end for weight, strength, nutrition.
 Remind Jason to take progress photos.
 
-22. **CREATE TRAINING BLOCK** - Start a new 4-week cycle (auto-generates all workouts + calendar)
+22. **CREATE TRAINING BLOCK** - Start a new 4-week cycle (auto-generates all workouts)
 ```json
 {{"action": "create_block", "name": "March 2026", "start_date": "2026-03-02", "end_date": "2026-03-29",
   "phase": "bulk", "calorie_target": 3000, "protein_target": 170,
@@ -196,7 +196,15 @@ Remind Jason to take progress photos.
   "cycling_days": ["Mon", "Wed", "Fri"], "notes": null}}
 ```
 Phase options: bulk, mini_cut, final_cut
-This automatically generates all 16 training sessions (4/week) with exercises from workout templates and pushes them to Google Calendar.
+This auto-generates all training sessions (4/week) with exercises from workout templates.
+
+22b. **PLAN NEXT BLOCK** - Auto-plan next month's block (knows the bulk/cut timeline)
+```json
+{{"action": "plan_next_block", "year": 2026, "month": 3, "weight_start": 82.5}}
+```
+Use this when Jason says "plan my March workouts" or "set up next month".
+Auto-calculates dates (first Monday → last Sunday), phase from the timeline, and nutrition targets.
+Generates all sessions automatically. No manual date/phase input needed.
 
 23. **PROGRESS PHOTOS** - Log that photos were taken
 ```json
@@ -236,9 +244,19 @@ Aesthetic priorities: lateral delts (15+ sets/week), upper chest (15 sets/week),
 Current: ~81kg @ ~22% BF
 Timeline: Feb 2026 – Jun 2028 (28 months)
 Goal: 88-89kg @ 12-13% BF
-2026: Bulk Feb-May (+4kg), mini-cut June (-2-3kg), bulk Jul-Oct (+3-4kg), mini-cut Nov (-2-3kg)
-Nutrition bulk: 3000 cal, 170g protein, 80g fat, 380g carbs, 3L water
-Nutrition mini-cut: 2400-2500 cal, 180g protein
+
+Phase timeline (auto-planned — use plan_next_block):
+2026: Feb-May BULK, Jun MINI-CUT, Jul-Oct BULK, Nov MINI-CUT, Dec BULK
+2027: Jan-May BULK, Jun MINI-CUT, Jul-Dec BULK
+2028: Jan-Jun FINAL CUT
+
+Nutrition auto-set by phase:
+- Bulk: 3000 cal, 170g protein
+- Mini-cut: 2450 cal, 180g protein
+- Final cut: 2300 cal, 185g protein
+
+Block boundaries: first Monday of the month → last Sunday (overlap Sundays belong to the ending month).
+At the end of each block, generate a block summary and plan the next month.
 
 ### SKINCARE ROUTINE (exception-based tracking):
 Morning: Vitamin C serum → SPF 50
@@ -415,6 +433,13 @@ def _build_fitness_context() -> str:
                 context += f"  Targets: {block['calorie_target']} cal / {block.get('protein_target', '?')}g protein\n"
             if block.get("weight_start"):
                 context += f"  Weight goal: {block['weight_start']}kg → {block.get('weight_target', '?')}kg\n"
+        else:
+            # No active block — show what phase should be active
+            now = datetime.now()
+            planned_phase = get_phase_for_month(now.year, now.month)
+            context += f"\n### ⚠️ No active block! Expected phase: {planned_phase.upper()}\n"
+            context += "  Suggest: 'Plan my [month] workouts' to create the block.\n"
+            has_data = True
 
         # Recent weight
         weights = get_weight_history(days=14)
