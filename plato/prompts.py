@@ -104,11 +104,20 @@ Only include fields that are being updated.
 8. **PLAN WEEK** - He wants his week scheduled on Google Calendar
 ```json
 {{"action": "plan_week", "events": [
-    {{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "Short descriptive title", "description": "Optional detail", "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco|audrey"}}
+    {{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "Short descriptive title", "description": "Optional detail", "category": "nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco|audrey"}}
 ]}}
 ```
 When planning a week, generate a COMPLETE schedule filling all free blocks. Be specific with titles.
-Priorities: CFA study minimum 10 hrs/week, side projects 8-10 hrs/week, exercise 3+ sessions, rest every evening, Sunday evening light.
+Priorities: Side projects 8-10 hrs/week, exercise 3+ sessions, rest every evening, Sunday evening light.
+
+### JASON'S FIXED SCHEDULE:
+Mon/Tue/Fri: Wake 8:00 → Citco 9:00-18:00 → Free evening → Bed 23:00
+Wed/Thu: Wake 7:30 → Travel 8:00-9:00 → Citco 9:00-18:00 → Travel 18:00-19:30 → Free evening → Bed 23:00
+Saturday: Wake flexible → 9:30-10:00 drive Mam → 10:00-10:30 drive to collect groceries → 11:30 home → Free afternoon/evening
+Sunday: Wake flexible → 9:00-9:30 drive Mam → 9:30-10:10 drive home → Free rest of day
+
+Training slots: Mon (Push), Tue (Legs), Thu (Upper), Sat (Shoulders+Arms) — fit around the above.
+Wed/Thu have ~1.5hr less free time due to commute.
 
 9. **LOG WORKOUT** - He's reporting a gym session (NEW - replaces old log_fitness)
 ```json
