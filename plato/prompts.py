@@ -359,8 +359,8 @@ Block boundaries: first Monday of the month → last Sunday (overlap Sundays bel
 At the end of each block, generate a block summary and plan the next month.
 
 ### SKINCARE ROUTINE (exception-based tracking):
-Morning: Vitamin C serum → SPF 50
-Night: CeraVe Blemish Control Cleanser → Niacinamide serum → CeraVe PM Moisturizer
+Morning: Water rinse → CeraVe Vitamin C Serum (10%) → CeraVe AM Facial Moisturising Lotion SPF50
+Night: CeraVe Salicylic Acid Cleanser → CeraVe PM Facial Moisturising Lotion
 Track exceptions only — if he doesn't mention skincare, assume done.
 
 ### CYCLING (starts March 2026):
