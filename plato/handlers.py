@@ -103,7 +103,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if pending and not schedule_context:
         pending_plan_context = f"\n\n## PENDING PLAN (awaiting approval)\nThere is a pending weekly plan with {len(pending)} events. The user may be requesting changes to it. If they request changes, generate a new plan_week action with the modified events.\n"
 
-    system_prompt = build_system_prompt(schedule_context=schedule_context + pending_plan_context)
+    system_prompt = build_system_prompt(message=user_message, schedule_context=schedule_context + pending_plan_context)
     messages = build_messages_with_history(user_message)
 
     # Use higher max_tokens for week planning (lots of JSON events)

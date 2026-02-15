@@ -285,19 +285,30 @@ def process_approve_plan() -> str:
         if not events:
             return "⚠️ No pending plan to approve. Say 'plan my week' first."
 
+        logger.info(f"Approving plan with {len(events)} events")
+
+        logger.info("Getting Google Calendar service...")
         service = get_calendar_service()
+
         first_date = datetime.strptime(events[0]["date"], "%Y-%m-%d")
         week_start = first_date - timedelta(days=first_date.weekday())
+        logger.info(f"Week start: {week_start.strftime('%Y-%m-%d')}")
 
+        logger.info("Clearing old Plato events...")
         cleared = clear_plato_events(service, week_start)
+        logger.info(f"Cleared {cleared} old events")
+
+        logger.info("Creating new calendar events...")
         created = create_weekly_events(service, events)
+        logger.info(f"Created {created}/{len(events)} calendar events")
+
         stored = store_schedule_events(events)
         clear_pending_plan()
 
         return f"📅 Approved! Scheduled {created} events (cleared {cleared} old ones). Tracking {stored} blocks."
 
     except Exception as e:
-        logger.error(f"Approve plan error: {e}")
+        logger.error(f"Approve plan error: {e}", exc_info=True)
         return f"⚠️ Error pushing plan: {e}"
 
 

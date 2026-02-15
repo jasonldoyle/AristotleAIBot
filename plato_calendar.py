@@ -17,14 +17,29 @@ logger = logging.getLogger(__name__)
 
 def get_calendar_service():
     """Build Google Calendar service from stored credentials."""
+    refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
+    client_id = os.environ.get("GOOGLE_CLIENT_ID")
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+
+    if not all([refresh_token, client_id, client_secret]):
+        missing = [k for k, v in {
+            "GOOGLE_REFRESH_TOKEN": refresh_token,
+            "GOOGLE_CLIENT_ID": client_id,
+            "GOOGLE_CLIENT_SECRET": client_secret,
+        }.items() if not v]
+        logger.error(f"Missing Google Calendar credentials: {missing}")
+        raise ValueError(f"Missing credentials: {missing}")
+
     creds = Credentials(
         token=None,
-        refresh_token=os.environ.get("GOOGLE_REFRESH_TOKEN"),
-        client_id=os.environ.get("GOOGLE_CLIENT_ID"),
-        client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
+        refresh_token=refresh_token,
+        client_id=client_id,
+        client_secret=client_secret,
         token_uri="https://oauth2.googleapis.com/token"
     )
-    return build('calendar', 'v3', credentials=creds)
+    service = build('calendar', 'v3', credentials=creds)
+    logger.info("Google Calendar service built successfully")
+    return service
 
 
 # ============== WEEKLY TEMPLATE ==============
@@ -152,11 +167,12 @@ def clear_plato_events(service, week_start: datetime):
 def cancel_evening_events(service, date_str: str, from_time: str = "18:00"):
     """Cancel Plato events for a specific evening. Returns list of cancelled event titles."""
     cancelled = []
-    
+
     events_result = service.events().list(
         calendarId='primary',
-        timeMin=f'{date_str}T{from_time}:00+00:00',
-        timeMax=f'{date_str}T23:59:00+00:00',
+        timeMin=f'{date_str}T{from_time}:00',
+        timeMax=f'{date_str}T23:59:00',
+        timeZone='Europe/Dublin',
         singleEvents=True,
         q='[Plato]'
     ).execute()
@@ -181,8 +197,9 @@ def get_todays_events(service, date_str: str = None):
     
     events_result = service.events().list(
         calendarId='primary',
-        timeMin=f'{date_str}T00:00:00+00:00',
-        timeMax=f'{date_str}T23:59:00+00:00',
+        timeMin=f'{date_str}T00:00:00',
+        timeMax=f'{date_str}T23:59:00',
+        timeZone='Europe/Dublin',
         singleEvents=True,
         orderBy='startTime',
         q='[Plato]'
@@ -200,10 +217,10 @@ def get_todays_events(service, date_str: str = None):
     ]
 
 
-def create_event(service, date_str: str, start_time: str, end_time: str, 
+def create_event(service, date_str: str, start_time: str, end_time: str,
                  title: str, description: str = None, color_id: str = None):
     """Create a single Google Calendar event."""
-    
+
     event = {
         'summary': f'[Plato] {title}',
         'start': {
@@ -215,15 +232,22 @@ def create_event(service, date_str: str, start_time: str, end_time: str,
             'timeZone': 'Europe/Dublin',
         },
     }
-    
+
     if description:
         event['description'] = description
-    
+
     if color_id:
         event['colorId'] = color_id
-    
-    created = service.events().insert(calendarId='primary', body=event).execute()
-    return created
+
+    logger.info(f"Creating calendar event: '{title}' on {date_str} {start_time}-{end_time}")
+    try:
+        created = service.events().insert(calendarId='primary', body=event).execute()
+        logger.info(f"Event created: id={created.get('id')}, link={created.get('htmlLink')}")
+        return created
+    except Exception as e:
+        logger.error(f"Failed to create event '{title}': {e}")
+        logger.error(f"Event payload: {json.dumps(event)}")
+        raise
 
 
 def create_weekly_events(service, schedule_events: list):
