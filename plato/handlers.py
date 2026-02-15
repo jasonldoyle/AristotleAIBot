@@ -20,30 +20,34 @@ from plato_calendar import get_schedule_prompt
 
 # ============== PLAN WEEK DETECTION ==============
 
-PLAN_TRIGGERS = [
-    "plan my week", "plan the week", "schedule my week",
-    "what should my week look like", "weekly plan",
-    "plan this week", "plan next week"
-]
-
-
 def detect_plan_week(user_message: str) -> str | None:
     """Check if user is asking to plan their week. Returns schedule prompt or None."""
     msg_lower = user_message.lower()
 
-    for trigger in PLAN_TRIGGERS:
-        if trigger in msg_lower:
-            today = datetime.now()
-            if "next week" in msg_lower:
-                days_ahead = 7 - today.weekday()
-                week_start = today + timedelta(days=days_ahead)
-            else:
-                week_start = today - timedelta(days=today.weekday())
+    # Check if the message is about weekly planning
+    has_plan_word = any(w in msg_lower for w in ["plan", "schedule", "organise", "organize", "set up"])
+    has_week_word = any(w in msg_lower for w in ["week", "weekly"])
+    is_plan_request = (has_plan_word and has_week_word) or "weekly plan" in msg_lower
 
-            week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-            return get_schedule_prompt(week_start)
+    if not is_plan_request:
+        return None
 
-    return None
+    today = datetime.now()
+    if "next week" in msg_lower:
+        # Explicitly asking for next week
+        days_ahead = 7 - today.weekday()
+        week_start = today + timedelta(days=days_ahead)
+    elif today.weekday() >= 5:
+        # Saturday or Sunday — "plan my week" means next week
+        days_ahead = 7 - today.weekday()
+        week_start = today + timedelta(days=days_ahead)
+    else:
+        # Weekday — plan the current week
+        week_start = today - timedelta(days=today.weekday())
+
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    logger.info(f"Plan week detected: week_start={week_start.strftime('%Y-%m-%d')} ({week_start.strftime('%A')})")
+    return get_schedule_prompt(week_start)
 
 
 # ============== MFP DETECTION ==============
@@ -105,6 +109,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     system_prompt = build_system_prompt(message=user_message, schedule_context=schedule_context + pending_plan_context)
     messages = build_messages_with_history(user_message)
+
+    logger.info(f"System prompt length: {len(system_prompt)} chars, domains detected for: '{user_message[:80]}'")
+    logger.info(f"Schedule context included: {bool(schedule_context)} ({len(schedule_context)} chars)")
 
     # Use higher max_tokens for week planning (lots of JSON events)
     max_tokens = 4096 if (schedule_context or pending_plan_context) else 1024
