@@ -93,28 +93,32 @@ Key difference from v1: Context is **summarized before injection**, not dumped r
 
 ---
 
-## Phase 2: Projects
+## Phase 2: Projects ✅
 **Goal:** Track active projects with goals, work logs, and soul doc alignment.
 
 ### Models:
 - `projects` — name, slug, intent, status, created_at
-- `project_goals` — project_id, timeframe (weekly/monthly/quarterly/milestone), goal_text, target_date, achieved
-- `project_logs` — project_id, summary, duration_mins, tags, mood, logged_at
+- `project_goals` — project_id, timeframe (weekly/monthly/quarterly/milestone), goal_text, target_date, achieved, achieved_at
+- `project_logs` — project_id, summary, duration_mins, mood, logged_at
 
 ### Actions:
 - `create_project` — Claude checks soul doc alignment before confirming
-- `log` — Log work on a project
+- `log_work` — Log work on a project (slug-based lookup with fuzzy matching)
 - `add_goal` / `achieve_goal` — Project milestones
-- Query project status
+- `update_project` — Pause/complete/abandon a project
+- `query_project` / `query_projects` — Project status queries
 
 ### Prompt:
-- Active projects with current goals included when project domain detected
+- Active projects with slugs and current goals always included in system prompt
 - Cross-reference: new project → soul doc check. Goal achieved → celebrate in context of bigger picture.
 
-### Test scenarios:
-- "I want to start working on a recipe app" → Claude checks soul doc, creates project if aligned
-- "Worked on Plato for 2 hours, refactored the DB layer" → logged
-- "How's my progress on CFA?" → summary with goals
+### Verified:
+- Project created via Telegram with soul doc alignment check
+- Work logged with duration and mood
+- Goals added with timeframe
+- Project paused and reactivated
+- Project queries return formatted summaries
+- Fuzzy slug matching resolves "plato-bot" → "plato"
 
 ---
 

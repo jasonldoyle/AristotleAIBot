@@ -9,6 +9,16 @@ from plato.db import (
     get_ideas,
     format_ideas,
     resolve_idea,
+    create_project,
+    get_projects,
+    get_project_by_slug,
+    update_project_status,
+    add_project_goal,
+    achieve_goal,
+    log_work,
+    get_project_summary,
+    format_projects_summary,
+    format_project_detail,
 )
 
 
@@ -48,6 +58,45 @@ def process_action(action: dict) -> str:
             case "query_ideas":
                 ideas = get_ideas()
                 return format_ideas(ideas)
+
+            case "create_project":
+                project_id = create_project(action["name"], action["slug"], action.get("intent"))
+                return f"Project '{action['name']}' created (slug: {action['slug']})."
+
+            case "log_work":
+                project = get_project_by_slug(action["slug"])
+                if not project:
+                    return f"Project '{action['slug']}' not found."
+                log_work(project["id"], action["summary"], action.get("duration_mins"), action.get("mood"))
+                return f"Work logged on {project['name']}."
+
+            case "add_goal":
+                project = get_project_by_slug(action["slug"])
+                if not project:
+                    return f"Project '{action['slug']}' not found."
+                add_project_goal(project["id"], action["timeframe"], action["goal_text"], action.get("target_date"))
+                return f"Goal added to {project['name']} ({action['timeframe']})."
+
+            case "achieve_goal":
+                found = achieve_goal(action["goal_id"])
+                if found:
+                    return "Goal achieved! Well done."
+                return "Goal not found."
+
+            case "update_project":
+                project = get_project_by_slug(action["slug"])
+                if not project:
+                    return f"Project '{action['slug']}' not found."
+                update_project_status(project["id"], action["status"])
+                return f"Project '{project['name']}' status updated to {action['status']}."
+
+            case "query_projects":
+                projects = get_projects(status="active")
+                return format_projects_summary(projects)
+
+            case "query_project":
+                summary = get_project_summary(action["slug"])
+                return format_project_detail(summary)
 
             case _:
                 logger.warning(f"Unknown action type: {action_type}")

@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Text, DateTime, func
+from sqlalchemy import Column, String, Text, DateTime, Integer, Boolean, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base
 
@@ -36,3 +36,38 @@ class Idea(Base):
     parked_at = Column(DateTime(timezone=True), nullable=True)
     eligible_date = Column(DateTime(timezone=True), nullable=True)
     resolution_notes = Column(Text, nullable=True)
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
+    name = Column(String, nullable=False)
+    slug = Column(String, unique=True, nullable=False)
+    intent = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="active")  # active, paused, completed, abandoned
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProjectGoal(Base):
+    __tablename__ = "project_goals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    timeframe = Column(String, nullable=False)  # weekly, monthly, quarterly, milestone
+    goal_text = Column(Text, nullable=False)
+    target_date = Column(DateTime(timezone=True), nullable=True)
+    achieved = Column(Boolean, default=False, server_default="false")
+    achieved_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProjectLog(Base):
+    __tablename__ = "project_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    summary = Column(Text, nullable=False)
+    duration_mins = Column(Integer, nullable=True)
+    mood = Column(String, nullable=True)  # productive, frustrated, flow, etc.
+    logged_at = Column(DateTime(timezone=True), server_default=func.now())

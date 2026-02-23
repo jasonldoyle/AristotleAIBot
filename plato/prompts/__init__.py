@@ -54,6 +54,48 @@ USE WHEN: Jason asks about his goals or soul doc.
 ```
 USE WHEN: Jason asks about his ideas.
 
+### create_project — Create a new project
+```json
+{"action": "create_project", "name": "<project name>", "slug": "<short-slug>", "intent": "<why this project exists>"}
+```
+USE WHEN: Jason wants to start tracking a project. Check soul doc alignment — the intent should connect to his goals. Slug should be lowercase, short (e.g. "plato", "nitrogen").
+
+### log_work — Log a work session on a project
+```json
+{"action": "log_work", "slug": "<project-slug>", "summary": "<what was done>", "duration_mins": <optional int>, "mood": "<optional: productive|frustrated|flow|scattered|energised>"}
+```
+USE WHEN: Jason mentions working on a project. Infer the slug from context.
+
+### add_goal — Add a goal to a project
+```json
+{"action": "add_goal", "slug": "<project-slug>", "timeframe": "weekly|monthly|quarterly|milestone", "goal_text": "<the goal>", "target_date": "<optional ISO date>"}
+```
+USE WHEN: Jason sets a goal for a project.
+
+### achieve_goal — Mark a project goal as achieved
+```json
+{"action": "achieve_goal", "goal_id": "<uuid>"}
+```
+USE WHEN: Jason completes a project goal. Celebrate in context of his bigger picture.
+
+### update_project — Change a project's status
+```json
+{"action": "update_project", "slug": "<project-slug>", "status": "active|paused|completed|abandoned"}
+```
+USE WHEN: Jason pauses, completes, or abandons a project.
+
+### query_projects — List all active projects
+```json
+{"action": "query_projects"}
+```
+USE WHEN: Jason asks what projects he's working on.
+
+### query_project — Get detailed project status
+```json
+{"action": "query_project", "slug": "<project-slug>"}
+```
+USE WHEN: Jason asks about progress on a specific project.
+
 CRITICAL RULES:
 - Only ONE action block per message
 - JSON block MUST be at the very start of your reply, wrapped in ```json ... ``` fences
