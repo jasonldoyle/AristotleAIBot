@@ -1,7 +1,9 @@
 python-telegram-bot[job-queue]
-supabase
 anthropic
 python-dotenv
+sqlalchemy
+alembic
+psycopg2-binary
 google-api-python-client
 google-auth-oauthlib
 google-auth-httplib2

@@ -1,97 +1,19 @@
 from plato.db.core import get_recent_conversations, save_conversation, clear_conversations
-from plato.db.projects import (
-    get_active_projects, get_unresolved_patterns, get_project_by_slug,
-    log_work, create_project, add_project_goal, mark_goal_achieved,
-    update_project, add_pattern
-)
-from plato.db.soul_doc import get_soul_doc, add_soul_doc_entry
-from plato.db.fitness import (
-    # Legacy compat
-    log_fitness_exercises, get_recent_fitness,
-    # Daily logs
-    log_daily, get_daily_log, get_daily_logs_range, get_weight_history,
-    # Training sessions
-    log_training_session, log_missed_session, get_training_sessions_range,
-    get_recent_training,
-    # Main lifts
-    get_lift_history, get_all_lift_latest, confirm_progression,
-    MAIN_LIFTS, LIFT_ALIASES, SESSION_TYPES,
-    # Nutrition
-    parse_mfp_diary, import_nutrition, get_nutrition_range, get_recent_nutrition,
-    # Blocks
-    create_training_block, get_current_block,
-    # Summaries
-    generate_weekly_summary, generate_block_summary,
-    # Progress photos
-    log_progress_photos,
-    # Fitness goals
-    add_fitness_goal, get_fitness_goals, achieve_fitness_goal, revise_fitness_goal,
-    # Workout templates
-    get_workout_template, get_all_templates, update_template_exercise,
-    # Block workout generation
-    generate_block_workouts, WEEKLY_SCHEDULE,
-    calculate_block_dates, get_phase_for_month, get_nutrition_for_phase, plan_next_block,
-    # Today's workout & completion
-    get_todays_workout, format_todays_workout, complete_workout,
-    update_template_weight, adjust_exercise_weight,
-)
-from plato.db.schedule import (
-    store_schedule_events, get_planned_events_for_date,
-    update_schedule_event, mark_evening_audrey, get_weekly_adherence,
-    store_pending_plan, get_pending_plan, clear_pending_plan
-)
-from plato.db.ideas import park_idea, get_parked_ideas, resolve_idea
-from plato.db.finance import (
-    parse_revolut_csv, parse_aib_csv, import_transactions,
-    get_transactions_for_month, get_spending_by_category,
-    get_monthly_summary, get_budget_limits, set_budget_limit,
-    check_budget_alerts, update_transaction_category
-)
-from plato.db.admin import (
-    add_task, complete_task, skip_task, delete_task,
-    add_recurring_task, complete_recurring, delete_recurring,
-    add_important_date, delete_important_date, get_all_important_dates,
-    get_pending_tasks, get_recurring_tasks, get_tasks_for_date,
-    get_overdue_tasks, get_upcoming_tasks, get_upcoming_dates,
-    mark_overdue_tasks, DAY_LOOKUP,
-)
+from plato.db.soul import get_soul_doc, add_soul_entry, supersede_soul_entry, update_soul_entry, format_soul_doc
+from plato.db.ideas import store_idea, park_idea, get_ideas, resolve_idea, format_ideas
 
 __all__ = [
-    "get_recent_conversations", "save_conversation", "clear_conversations",
-    "get_active_projects", "get_unresolved_patterns", "get_project_by_slug",
-    "log_work", "create_project", "add_project_goal", "mark_goal_achieved",
-    "update_project", "add_pattern",
-    "get_soul_doc", "add_soul_doc_entry",
-    "log_fitness_exercises", "get_recent_fitness",
-    "log_daily", "get_daily_log", "get_daily_logs_range", "get_weight_history",
-    "log_training_session", "log_missed_session", "get_training_sessions_range",
-    "get_recent_training",
-    "get_lift_history", "get_all_lift_latest", "confirm_progression",
-    "MAIN_LIFTS", "LIFT_ALIASES", "SESSION_TYPES",
-    "parse_mfp_diary", "import_nutrition", "get_nutrition_range", "get_recent_nutrition",
-    "create_training_block", "get_current_block",
-    "generate_weekly_summary", "generate_block_summary",
-    "log_progress_photos",
-    "add_fitness_goal", "get_fitness_goals", "achieve_fitness_goal", "revise_fitness_goal",
-    "get_workout_template", "get_all_templates", "update_template_exercise",
-    "generate_block_workouts", "WEEKLY_SCHEDULE",
-    "calculate_block_dates", "get_phase_for_month", "get_nutrition_for_phase", "plan_next_block",
-    # Today's workout & completion
-    "get_todays_workout", "format_todays_workout", "complete_workout",
-    "update_template_weight", "adjust_exercise_weight",
-    "store_schedule_events", "get_planned_events_for_date",
-    "update_schedule_event", "mark_evening_audrey", "get_weekly_adherence",
-    "store_pending_plan", "get_pending_plan", "clear_pending_plan",
-    "park_idea", "get_parked_ideas", "resolve_idea",
-    "parse_revolut_csv", "parse_aib_csv", "import_transactions",
-    "get_transactions_for_month", "get_spending_by_category",
-    "get_monthly_summary", "get_budget_limits", "set_budget_limit",
-    "check_budget_alerts", "update_transaction_category",
-    # Admin
-    "add_task", "complete_task", "skip_task", "delete_task",
-    "add_recurring_task", "complete_recurring", "delete_recurring",
-    "add_important_date", "delete_important_date", "get_all_important_dates",
-    "get_pending_tasks", "get_recurring_tasks", "get_tasks_for_date",
-    "get_overdue_tasks", "get_upcoming_tasks", "get_upcoming_dates",
-    "mark_overdue_tasks", "DAY_LOOKUP",
+    "get_recent_conversations",
+    "save_conversation",
+    "clear_conversations",
+    "get_soul_doc",
+    "add_soul_entry",
+    "supersede_soul_entry",
+    "update_soul_entry",
+    "format_soul_doc",
+    "store_idea",
+    "park_idea",
+    "get_ideas",
+    "resolve_idea",
+    "format_ideas",
 ]

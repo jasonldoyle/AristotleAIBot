@@ -1,63 +1,71 @@
-"""
-Prompt orchestrator — builds system prompts based on message intent.
-"""
-
-import logging
 from plato.db import get_recent_conversations
-from plato.prompts.base import get_base_prompt, get_guidelines
-from plato.prompts.intent import detect_domains
-from plato.prompts.context import get_today_schedule_brief, get_overdue_tasks_brief
-from plato.prompts.domains import get_domain_prompt
-
-logger = logging.getLogger(__name__)
+from plato.prompts.base import get_base_prompt
 
 
-def build_system_prompt(message: str = "", schedule_context: str = "") -> str:
-    """Build Plato's system prompt with only relevant domain context.
+ACTION_SCHEMA = """
+## Actions
+You have access to actions that store and retrieve data. When an action is needed, emit a fenced JSON block at the VERY START of your reply, before any text:
 
-    Args:
-        message: The user's message (used for intent detection).
-        schedule_context: Extra schedule context (e.g., week planning prompt).
-    """
-    parts = []
+```json
+{"action": "<action_type>", ...params}
+```
 
-    # Always included: base prompt with personality + soul doc
-    parts.append(get_base_prompt())
+Then write your normal response after the JSON block.
 
-    # Always included: brief ambient context
-    today_schedule = get_today_schedule_brief()
-    if today_schedule:
-        parts.append(today_schedule)
+### add_soul — Store a goal, principle, or rule
+```json
+{"action": "add_soul", "category": "<category>", "content": "<text>"}
+```
+Categories: goal_lifetime, goal_5yr, goal_2yr, goal_1yr, philosophy, rule
+USE WHEN: Jason states a clear, definitive goal or principle. If the goal is vague, challenge him to refine it first — only store once it's sharp and specific. When you store it, summarise it concisely.
 
-    overdue = get_overdue_tasks_brief()
-    if overdue:
-        parts.append(overdue)
+### update_soul — Refine/replace an existing soul doc entry
+```json
+{"action": "update_soul", "category": "<category>", "old_content": "<keyword or phrase from the original entry>", "content": "<refined text>"}
+```
+USE WHEN: Jason refines or clarifies a goal through conversation. Supersedes the old entry and stores the new version. Use a distinctive phrase from the original entry as old_content so it can be matched.
 
-    # Detect which domains are relevant
-    domains = detect_domains(message)
+### store_idea — Store an idea
+```json
+{"action": "store_idea", "idea": "<description>", "context": "<optional context>"}
+```
+USE WHEN: Jason mentions a new idea or project concept. Store it, then comment on how it aligns with his goals.
 
-    # If schedule_context is provided (plan week flow), always include schedule domain
-    if schedule_context:
-        domains.add("schedule")
+### park_idea — Park a stored idea with a 14-day cooling period
+```json
+{"action": "park_idea", "idea_id": "<uuid>"}
+```
+USE WHEN: Jason explicitly wants to park an idea for a cooling period.
 
-    logger.info(f"Detected domains: {domains or 'none (general chat)'}")
+### resolve_idea — Approve or reject an idea
+```json
+{"action": "resolve_idea", "idea_id": "<uuid>", "status": "approved|rejected", "notes": "<optional>"}
+```
 
-    if domains:
-        parts.append("\n## YOUR CAPABILITIES\nWhen Jason messages you, determine the intent and respond with the appropriate JSON action block followed by your message.\n\n### ACTIONS YOU CAN TAKE:")
+### query_soul — Retrieve the full soul doc
+```json
+{"action": "query_soul"}
+```
+USE WHEN: Jason asks about his goals or soul doc.
 
-        for domain in sorted(domains):
-            domain_prompt = get_domain_prompt(domain)
-            if domain_prompt:
-                parts.append(domain_prompt)
+### query_ideas — List all ideas
+```json
+{"action": "query_ideas"}
+```
+USE WHEN: Jason asks about his ideas.
 
-    # Guidelines always included
-    parts.append(get_guidelines())
+CRITICAL RULES:
+- Only ONE action block per message
+- JSON block MUST be at the very start of your reply, wrapped in ```json ... ``` fences
+- If no action is needed, respond normally without a JSON block
+- NEVER fake or simulate an action in plain text. If data needs to be stored (soul entry, parked idea), you MUST emit the JSON block — plain text descriptions like "Parked: ..." do NOT actually save anything
+- The JSON block is your ONLY way to persist data. Without it, nothing is stored
+"""
 
-    # Extra schedule context (week planning prompt from plato_calendar.py)
-    if schedule_context:
-        parts.append(schedule_context)
 
-    return "\n".join(parts)
+def build_system_prompt() -> str:
+    """Build Plato's system prompt — personality + soul doc + action schemas."""
+    return get_base_prompt() + ACTION_SCHEMA
 
 
 def build_messages_with_history(user_message: str) -> list[dict]:

@@ -1,17 +1,31 @@
-from plato.config import supabase
+from plato.config import SessionLocal
+from plato.models import Conversation
 
 
 def get_recent_conversations(limit: int = 10) -> list[dict]:
     """Fetch recent conversation history."""
-    result = supabase.table("conversations").select("*").order("created_at", desc=True).limit(limit).execute()
-    return list(reversed(result.data)) if result.data else []
+    with SessionLocal() as session:
+        rows = (
+            session.query(Conversation)
+            .order_by(Conversation.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {"role": r.role, "content": r.content}
+            for r in reversed(rows)
+        ]
 
 
 def save_conversation(role: str, content: str) -> None:
     """Save a message to conversation history."""
-    supabase.table("conversations").insert({"role": role, "content": content}).execute()
+    with SessionLocal() as session:
+        session.add(Conversation(role=role, content=content))
+        session.commit()
 
 
 def clear_conversations() -> None:
     """Delete all conversation history."""
-    supabase.table("conversations").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+    with SessionLocal() as session:
+        session.query(Conversation).delete()
+        session.commit()
