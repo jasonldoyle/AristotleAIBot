@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from plato.config import logger
 from plato.db import (
     add_soul_entry,
@@ -19,7 +21,37 @@ from plato.db import (
     get_project_summary,
     format_projects_summary,
     format_project_detail,
+    save_pending_plan,
+    get_pending_plan,
+    approve_pending_plan,
+    cancel_evening_schedule_events,
+    cancel_schedule_event,
+    update_schedule_event,
+    save_schedule_event,
+    report_deviation as db_report_deviation,
 )
+from plato.calendar import (
+    get_calendar_service,
+    clear_plato_events,
+    cancel_evening_events,
+    cancel_specific_event,
+    create_event,
+    create_weekly_events,
+    get_schedule_prompt,
+    COLOR_MAP,
+)
+
+
+def _compute_week_start() -> str:
+    """Return next Monday, unless today is Monday (then this Monday)."""
+    today = datetime.now()
+    weekday = today.weekday()  # 0=Mon
+    if weekday == 0:  # Monday: plan this week
+        return today.strftime("%Y-%m-%d")
+    # Any other day: plan next week
+    days_until_monday = 7 - weekday
+    monday = today + timedelta(days=days_until_monday)
+    return monday.strftime("%Y-%m-%d")
 
 
 def process_action(action: dict) -> str:
@@ -97,6 +129,144 @@ def process_action(action: dict) -> str:
             case "query_project":
                 summary = get_project_summary(action["slug"])
                 return format_project_detail(summary)
+
+            # --- Schedule actions ---
+
+            case "plan_week":
+                events = action["events"]
+                week_start = _compute_week_start()
+                plan_id = save_pending_plan(week_start, events)
+
+                # Format preview
+                lines = [f"Week of {week_start}:\n"]
+                current_date = None
+                for ev in sorted(events, key=lambda e: (e["date"], e["start"])):
+                    if ev["date"] != current_date:
+                        current_date = ev["date"]
+                        day_name = datetime.strptime(ev["date"], "%Y-%m-%d").strftime("%A %b %d")
+                        lines.append(f"\n{day_name}:")
+                    lines.append(f"  {ev['start']}-{ev['end']}: {ev['title']} [{ev.get('category', '')}]")
+
+                lines.append(f"\nTotal events: {len(events)}")
+                lines.append("Reply 'approve' to push to Google Calendar, or suggest changes.")
+                return "\n".join(lines)
+
+            case "approve_plan":
+                pending = get_pending_plan()
+                if not pending:
+                    return "No pending plan to approve."
+
+                events = approve_pending_plan(pending["id"])
+                if not events:
+                    return "Failed to approve plan."
+
+                try:
+                    service = get_calendar_service()
+                    week_start_dt = datetime.strptime(pending["week_start"], "%Y-%m-%d")
+                    clear_plato_events(service, week_start_dt)
+                    count = create_weekly_events(service, events)
+                    return f"Plan approved. {count} events pushed to Google Calendar."
+                except Exception as e:
+                    logger.error(f"Calendar push failed: {e}")
+                    return f"Plan approved in DB, but calendar push failed: {e}"
+
+            case "audrey_time":
+                date_str = action.get("date", datetime.now().strftime("%Y-%m-%d"))
+
+                # Cancel in DB
+                db_count = cancel_evening_schedule_events(date_str)
+
+                # Cancel on Google Calendar
+                cancelled_titles = []
+                try:
+                    service = get_calendar_service()
+                    cancelled_titles = cancel_evening_events(service, date_str)
+                except Exception as e:
+                    logger.error(f"Calendar cancellation failed: {e}")
+
+                if cancelled_titles:
+                    return f"Evening cleared for Audrey time. Cancelled: {', '.join(cancelled_titles)}"
+                elif db_count > 0:
+                    return f"Evening cleared for Audrey time. {db_count} events cancelled."
+                else:
+                    return "Evening cleared for Audrey time. No scheduled events to cancel."
+
+            case "report_deviation":
+                date_str = action.get("date", datetime.now().strftime("%Y-%m-%d"))
+                found = db_report_deviation(date_str, action["title"], action["reason"])
+                if found:
+                    return f"Deviation logged for {date_str}: {action['reason']}"
+                return f"Deviation noted for {date_str}: {action['reason']} (no matching scheduled event found)"
+
+            case "add_event":
+                date_str = action["date"]
+                start = action["start"]
+                end = action["end"]
+                title = action["title"]
+                category = action.get("category", "personal")
+
+                # Save to DB
+                save_schedule_event(date_str, start, end, title, category)
+
+                # Push to Google Calendar
+                try:
+                    service = get_calendar_service()
+                    color = COLOR_MAP.get(category)
+                    create_event(service, date_str, start, end, title, action.get("description"), color)
+                except Exception as e:
+                    logger.error(f"Calendar event creation failed: {e}")
+                    return f"Event '{title}' saved to DB on {date_str} {start}-{end}, but calendar push failed: {e}"
+
+                return f"Event '{title}' added on {date_str} {start}-{end}."
+
+            case "cancel_event":
+                date_str = action["date"]
+                title_keyword = action["title"]
+
+                # Cancel in DB
+                cancelled_title = cancel_schedule_event(date_str, title_keyword)
+
+                # Cancel on Google Calendar
+                try:
+                    service = get_calendar_service()
+                    cancel_specific_event(service, date_str, title_keyword)
+                except Exception as e:
+                    logger.error(f"Calendar cancellation failed: {e}")
+
+                if cancelled_title:
+                    return f"Cancelled '{cancelled_title}' on {date_str}."
+                return f"No scheduled event matching '{title_keyword}' found on {date_str}."
+
+            case "edit_event":
+                date_str = action["date"]
+                title_keyword = action["title"]
+                new_date = action.get("new_date", date_str)
+                new_start = action.get("new_start")
+                new_end = action.get("new_end")
+                new_title = action.get("new_title")
+
+                # Update in DB
+                old = update_schedule_event(date_str, title_keyword,
+                                            new_date=new_date, new_start=new_start,
+                                            new_end=new_end, new_title=new_title)
+                if not old:
+                    return f"No scheduled event matching '{title_keyword}' found on {date_str}."
+
+                # Update on Google Calendar: cancel old + create new
+                try:
+                    service = get_calendar_service()
+                    cancel_specific_event(service, date_str, title_keyword)
+                    color = COLOR_MAP.get(old.get("category", ""))
+                    create_event(service, new_date,
+                                 new_start or old["start_time"],
+                                 new_end or old["end_time"],
+                                 new_title or old["title"],
+                                 color_id=color)
+                except Exception as e:
+                    logger.error(f"Calendar edit failed: {e}")
+                    return f"Event updated in DB, but calendar sync failed: {e}"
+
+                return f"Event updated: '{old['title']}' on {date_str} -> '{new_title or old['title']}' on {new_date} {new_start or old['start_time']}-{new_end or old['end_time']}."
 
             case _:
                 logger.warning(f"Unknown action type: {action_type}")

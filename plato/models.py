@@ -71,3 +71,29 @@ class ProjectLog(Base):
     duration_mins = Column(Integer, nullable=True)
     mood = Column(String, nullable=True)  # productive, frustrated, flow, etc.
     logged_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ScheduleEvent(Base):
+    __tablename__ = "schedule_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
+    date = Column(String, nullable=False)               # "YYYY-MM-DD"
+    start_time = Column(String, nullable=False)          # "HH:MM"
+    end_time = Column(String, nullable=False)            # "HH:MM"
+    title = Column(String, nullable=False)
+    category = Column(String, nullable=True)             # cfa, nitrogen, exercise, rest, etc.
+    status = Column(String, default="scheduled")         # scheduled, completed, deviated, cancelled
+    deviation_reason = Column(Text, nullable=True)
+    week_start = Column(String, nullable=True)           # Monday of the week
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class PendingPlan(Base):
+    __tablename__ = "pending_plans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
+    week_start = Column(String, nullable=False)          # "YYYY-MM-DD" Monday
+    events_json = Column(Text, nullable=False)           # JSON string of events array
+    status = Column(String, default="pending")           # pending, approved, rejected
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    resolved_at = Column(DateTime(timezone=True), nullable=True)

@@ -7,6 +7,12 @@ from plato.db.projects import (
     log_work, get_project_logs, get_project_summary,
     format_projects_summary, format_project_detail,
 )
+from plato.db.schedule import (
+    save_pending_plan, get_pending_plan, approve_pending_plan, reject_pending_plan,
+    save_schedule_event, report_deviation, cancel_evening_schedule_events,
+    cancel_schedule_event, update_schedule_event,
+    get_schedule_for_date, get_schedule_for_week, format_todays_schedule,
+)
 
 __all__ = [
     "get_recent_conversations",
@@ -34,4 +40,16 @@ __all__ = [
     "get_project_summary",
     "format_projects_summary",
     "format_project_detail",
+    "save_pending_plan",
+    "get_pending_plan",
+    "approve_pending_plan",
+    "reject_pending_plan",
+    "save_schedule_event",
+    "report_deviation",
+    "cancel_evening_schedule_events",
+    "cancel_schedule_event",
+    "update_schedule_event",
+    "get_schedule_for_date",
+    "get_schedule_for_week",
+    "format_todays_schedule",
 ]

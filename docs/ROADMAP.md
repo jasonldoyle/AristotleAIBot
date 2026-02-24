@@ -122,38 +122,76 @@ Key difference from v1: Context is **summarized before injection**, not dumped r
 
 ---
 
-## Phase 3: Schedule
+## Phase 3: Schedule ✅
 **Goal:** Weekly planning with Google Calendar, deviation tracking, Audrey time. The week serves the year, which serves the 2yr, 5yr, and lifetime goals in the soul doc. Schedule planning should consult soul doc priorities to allocate subjective time.
 
 ### Models:
-- `schedule_events` — date, start_time, end_time, title, category, status, deviation_reason
-- `schedule_template` — Hardcoded weekly template (work, gym, mam, groceries)
-- `pending_plan` — Staged weekly plan before approval
+- `schedule_events` — date, start_time, end_time, title, category, status (scheduled/completed/deviated/cancelled), deviation_reason, week_start
+- `pending_plans` — week_start, events_json (full events array as JSON), status (pending/approved/rejected), resolved_at
 
-### Hard-coded template (fixed, non-negotiable blocks):
-- Work: 9-6 (WFH or office depending on day, with commute on office days)
-- Gym: Mon, Tue, Fri, Sat (times from fitness domain)
-- Mam driving: Sat 9:15-10:45, Sun 9-10:30
+### Files created/modified:
+- `plato/calendar.py` — **Created.** Google Calendar module: auth, weekly template, event CRUD, schedule prompt builder
+- `plato/models.py` — **Edited.** Added `ScheduleEvent` + `PendingPlan` models
+- `alembic/versions/004_add_schedule.py` — **Created.** Migration for both tables
+- `plato/db/schedule.py` — **Created.** All schedule DB functions (pending plans, events, deviations, cancellation, editing)
+- `plato/db/__init__.py` — **Edited.** Added schedule imports/exports
+- `plato/actions.py` — **Edited.** Added 7 action cases: plan_week, approve_plan, audrey_time, report_deviation, add_event, cancel_event, edit_event
+- `plato/prompts/__init__.py` — **Edited.** Extended ACTION_SCHEMA with 7 new action definitions
+- `plato/prompts/base.py` — **Edited.** Added today's schedule, pending plan notice, and full weekly template to system prompt
+- `plato/handlers.py` — **Edited.** max_tokens increased from 1024 to 4096
+
+### Hard-coded weekly template (in `get_weekly_template()`):
+- Work: 9-18 (WFH Mon/Fri, Office Tue/Wed/Thu with commute blocks)
+- Gym: Mon 18:00-19:20 (WFH), Tue 19:45-20:50 (post-office), Fri 18:00-19:20 (WFH), Sat 07:30-09:00
+- Mam driving: Sat 09:15-10:45 + 19:00-20:30, Sun 09:00-10:30 + 19:00-20:30
 - Groceries: Sat 10:45-11:15
-- Subjective (planned around fixed blocks): project time, CFA study — allocated based on soul doc goal priorities
-- Audrey time: wildcard override, can trump anything
+- Free blocks filled by Claude with active projects, rest, personal time
 
 ### Actions:
-- `plan_week` — Generate schedule around fixed blocks, push to Google Calendar
-- `audrey_time` — Cancel evening plans
-- `report_deviation` — Log what changed and why (for pattern tracking)
-- `add_event` — One-off calendar event
+- `plan_week` — Claude generates full week of events from template. Auto-computes week_start (next Monday, or this Monday if today is Monday). Stores as pending plan, shows preview.
+- `approve_plan` — Approves pending plan, creates ScheduleEvent rows in DB, clears old [Plato] events from Google Calendar, pushes new events.
+- `audrey_time` — Blanket cancel all evening events (DB + Google Calendar) from 18:00. No judgement.
+- `report_deviation` — Matches scheduled event by date + title keyword, marks as deviated with reason.
+- `add_event` — Creates one-off event in DB + Google Calendar.
+- `cancel_event` — Cancels specific event by date + title keyword (DB + Google Calendar).
+- `edit_event` — Updates event fields in DB, cancels old + creates new on Google Calendar.
 
-### Deviation tracking:
-- Schedule assumed followed by default
-- End-of-day nudge: "Anything deviate from the plan today?"
-- Deviations stored with reasons for weekly review pattern analysis
+### Scheduling prompt:
+- Dynamic project list — only schedules active projects from DB, not hardcoded CFA/Nitrogen
+- Full weekly template JSON injected into system prompt so Claude knows all fixed blocks
+- Rules: no overlap with fixed blocks, batch similar work, rest minimums, Sunday light, morning blocks for focused work
 
-### Test scenarios:
-- "Plan my week" → schedule generated respecting fixed blocks
-- "Approve" → pushed to Google Calendar
-- "Didn't do CFA tonight, went to cinema with Audrey" → deviation logged, no judgment
-- End-of-day nudge fires, Jason reports or confirms compliance
+### Verified:
+- Migration runs successfully (004_add_schedule creates both tables in Supabase)
+- All imports resolve cleanly
+- Google Calendar auth working (token refreshed, app published to production — no more 7-day expiry)
+- `plan_week` action creates pending plan and returns formatted day-by-day preview
+- `approve_plan` pushes events to Google Calendar (37 events confirmed)
+- `approve_plan` with no pending plan returns "No pending plan to approve."
+- `report_deviation` logs deviation reason against matching event
+- System prompt includes today's schedule, pending plan notice, and full weekly template
+- Claude correctly avoids scheduling over work/commute/fixed blocks
+- Claude only schedules active projects (no phantom CFA when not an active project)
+- Week start logic plans next week (not current week mid-way through)
+
+### Still to test (next session):
+- `audrey_time` — "Audrey time tonight" cancels evening events from DB + Google Calendar
+- `add_event` — "Dentist Thursday at 2pm for an hour" creates one-off event
+- `cancel_event` — "Cancel the Plato session on Wednesday" removes specific event
+- `edit_event` — "Move Saturday Plato to Sunday morning" reschedules event
+- `report_deviation` — via Telegram (verified in code, not yet via bot)
+- Plan revision flow — "Plan my week" → see plan → "Swap X and Y on Wednesday" → revised plan
+- Verify all 7 days appear (Monday was previously skipped by Claude)
+- Verify all 4 gym sessions appear in generated plan
+- End-of-day deviation nudge (not yet implemented — Phase 6)
+
+### Known issues resolved during implementation:
+1. Week start logic initially planned current week — fixed to always plan next Monday
+2. Claude didn't see weekly template — fixed by injecting `get_schedule_prompt()` into base prompt
+3. Scheduling rules hardcoded CFA — fixed to dynamically reference active projects only
+4. Tuesday gym missing from template — fixed: office gym days now have post-commute gym at 19:45
+5. Google Calendar token expired — re-authed, app published to production (permanent token)
+6. Migration failed on first run (tables existed from old code) — added DROP IF EXISTS
 
 ---
 

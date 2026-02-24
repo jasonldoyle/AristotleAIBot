@@ -26,7 +26,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     response = anthropic_client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=1024,
+        max_tokens=4096,
         system=system_prompt,
         messages=messages
     )
