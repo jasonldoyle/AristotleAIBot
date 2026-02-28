@@ -142,7 +142,7 @@ Key difference from v1: Context is **summarized before injection**, not dumped r
 
 ### Hard-coded weekly template (in `get_weekly_template()`):
 - Work: 9-18 (WFH Mon/Fri, Office Tue/Wed/Thu with commute blocks)
-- Gym: Mon 18:00-19:20 (WFH), Tue 19:45-20:50 (post-office), Fri 18:00-19:20 (WFH), Sat 07:30-09:00
+- Gym: Mon 18:00-19:20 (WFH), Tue 19:45-20:50 (post-office), Fri 18:00-19:20 (WFH), Sat 11:15-12:20 (after click & collect)
 - Mam driving: Sat 09:15-10:45 + 19:00-20:30, Sun 09:00-10:30 + 19:00-20:30
 - Groceries: Sat 10:45-11:15
 - Free blocks filled by Claude with active projects, rest, personal time
@@ -174,16 +174,21 @@ Key difference from v1: Context is **summarized before injection**, not dumped r
 - Claude only schedules active projects (no phantom CFA when not an active project)
 - Week start logic plans next week (not current week mid-way through)
 
-### Still to test (next session):
+### Remaining tests (not yet verified via Telegram):
 - `audrey_time` — "Audrey time tonight" cancels evening events from DB + Google Calendar
 - `add_event` — "Dentist Thursday at 2pm for an hour" creates one-off event
 - `cancel_event` — "Cancel the Plato session on Wednesday" removes specific event
 - `edit_event` — "Move Saturday Plato to Sunday morning" reschedules event
 - `report_deviation` — via Telegram (verified in code, not yet via bot)
 - Plan revision flow — "Plan my week" → see plan → "Swap X and Y on Wednesday" → revised plan
-- Verify all 7 days appear (Monday was previously skipped by Claude)
-- Verify all 4 gym sessions appear in generated plan
 - End-of-day deviation nudge (not yet implemented — Phase 6)
+
+### Verified via Telegram:
+- All 7 days appear in generated plan (Monday through Sunday)
+- All 4 gym sessions appear (Mon/Tue/Fri evenings + Sat 11:15)
+- "Plan next week" produces correct Mon-Sun dates
+- Weekend project blocks (Sat morning, Sat 15-19, Sun 10:30-19) correctly assigned as project work
+- Dual-week template fix prevents day-shift bug when planning next week
 
 ### Known issues resolved during implementation:
 1. Week start logic initially planned current week — fixed to always plan next Monday
@@ -288,7 +293,29 @@ Key difference from v1: Context is **summarized before injection**, not dumped r
 
 ---
 
-## Phase 7: Polish + Hardening
+## Phase 7: Dashboard
+**Goal:** Visual dashboard to represent everything Plato tracks and plans. A single view into schedule, projects, goals, and progress.
+
+### Scope (TBD):
+- Hosting: local-only or hosted — to be decided
+- Tech stack: TBD (likely a lightweight web framework)
+
+### Potential views:
+- Weekly schedule overview (calendar-style with color-coded blocks)
+- Project progress: active projects, goal completion, work log history
+- Soul doc: goals by tier, alignment tracking
+- Ideas: pipeline view (active → parked → approved/rejected)
+- Schedule adherence: compliance rates, deviation patterns
+- Fitness dashboard (once Phase 4 is complete): weight trends, lift progress, nutrition
+- Finance overview (once Phase 5 is complete): spending by category, budget adherence
+
+### Data source:
+- Reads directly from the same PostgreSQL database Plato writes to
+- No separate data pipeline needed — the bot is the single source of truth
+
+---
+
+## Phase 8: Polish + Hardening
 **Goal:** Clean up, optimize, document.
 
 ### Tasks:

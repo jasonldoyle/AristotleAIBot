@@ -6,83 +6,78 @@
 Telegram Message
     |
     v
-plato_bot.py          → Application setup, command/message handlers, scheduled jobs
+plato_bot.py          → Application setup, command/message handlers
     |
     v
-plato/handlers.py     → Message routing, intent detection, Claude API calls
+plato/handlers.py     → Auth check, conversation history, Claude API calls
     |
     v
-plato/prompts/        → System prompt assembly (intent-based domain selection)
+plato/prompts/        → System prompt assembly (base + soul doc + projects + schedule + action schemas)
     |
     v
 Claude Sonnet API     → Returns text + optional JSON action block
     |
     v
-plato/actions.py      → Processes JSON actions, calls db/ and plato_calendar.py
+plato/actions.py      → Processes JSON actions, calls db/ and calendar.py
     |
     v
-plato/db/             → Supabase CRUD operations (one file per domain)
-plato_calendar.py     → Google Calendar API operations
+plato/db/             → PostgreSQL CRUD operations (one file per domain)
+plato/calendar.py     → Google Calendar API operations
 ```
 
 ## Module Dependency Diagram
 
 ```
 plato_bot.py
-  +-- plato/config.py        (env vars, clients: supabase, anthropic)
+  +-- plato/config.py        (env vars, clients: SQLAlchemy engine, Anthropic)
   +-- plato/handlers.py       (message handling, Claude API calls)
   |     +-- plato/prompts/    (system prompt construction)
-  |     |     +-- plato/db/   (context data from Supabase)
+  |     |     +-- plato/db/   (context data from PostgreSQL)
+  |     |     +-- plato/calendar.py (schedule template + prompt)
   |     +-- plato/actions.py  (action processing)
   |           +-- plato/db/   (data mutations)
-  |           +-- plato_calendar.py (Google Calendar)
-  +-- plato/nudges.py         (scheduled proactive messages)
-        +-- plato/db/         (schedule + task queries)
+  |           +-- plato/calendar.py (Google Calendar CRUD)
 ```
 
 ## Key Components
 
 ### handlers.py
-- `handle_message()` - Main message handler: detects plan-week requests, MFP pastes, approval commands; builds prompt; calls Claude; parses JSON actions
-- `handle_document()` - File upload handler for CSVs and MFP text files
-- `start()`, `status()`, `clear_history()` - Telegram command handlers
+- `handle_message()` — Main handler: auth check, save message, build prompt, call Claude, parse JSON action block, route to actions, reply
+- `start()`, `status()`, `clear_history()` — Telegram command handlers
+- Max tokens: 4096
 
 ### prompts/ (package)
-- `build_system_prompt(message)` - Orchestrator: detects intent, assembles base + relevant domain schemas + context
-- `build_messages_with_history()` - Builds message list with last 10 conversation turns
-- Intent detection via keyword matching per domain
-- Context builders pull live data from Supabase
+- `build_system_prompt()` — Assembles base prompt + action schemas
+- `build_messages_with_history()` — Last 10 conversation turns for Claude context
+- `get_base_prompt()` — Personality, soul doc injection, active projects, today's schedule
+- Action schemas define all 21 actions with parameters, categories, and trigger conditions
 
 ### actions.py
-- `process_action(action_data, raw_message)` - Router dispatching to per-action processors
-- Each action processor validates data, calls db functions, returns status message
-- Calendar actions call `plato_calendar.py` for Google Calendar sync
+- `process_action(action_data, raw_message)` — Match statement dispatching to per-action handlers
+- Each handler validates data, calls db functions, returns status message
+- Calendar actions call `calendar.py` for Google Calendar sync
+
+### calendar.py
+- Google Calendar OAuth2 (refresh token flow, app published to production)
+- `get_weekly_template()` — Generates typed time blocks for each day (work, commute, fixed, free)
+- `get_schedule_prompt()` — Builds scheduling rules and dual-week templates (this week + next week)
+- Event CRUD: create, clear week, cancel event, edit event, audrey time
 
 ### db/ (package)
-- `core.py` - Conversation history
-- `projects.py` - Project CRUD, work logs, goals, patterns
-- `fitness.py` - Training sessions, daily logs, nutrition, blocks, templates
-- `schedule.py` - Calendar events, pending plans, adherence
-- `finance.py` - CSV parsing, transactions, budgets
-- `admin.py` - Tasks, recurring tasks, important dates
-- `ideas.py` - Idea parking lot
-- `soul_doc.py` - Soul doc entries
+- `core.py` — Conversation history
+- `soul.py` — Soul doc entries
+- `ideas.py` — Idea parking lot
+- `projects.py` — Projects, goals, work logs
+- `schedule.py` — Schedule events, pending plans, deviations
 
-### plato_calendar.py
-- Google Calendar OAuth2 (refresh token flow)
-- Weekly template generation (office vs WFH days, fixed commitments)
-- Event CRUD: create, clear, cancel evening events
-- Schedule prompt builder for week planning
-
-### nudges.py
-- `check_for_nudges()` - Every 5 min: checks if a schedule block just ended
-- `morning_briefing()` - 7:30am: today's tasks, dates, schedule
-- `overdue_check()` - 2pm: overdue task reminders
+### models.py
+SQLAlchemy models for all 9 tables: `Conversation`, `SoulDoc`, `Idea`, `Project`, `ProjectGoal`, `ProjectLog`, `ScheduleEvent`, `PendingPlan`
 
 ## Design Decisions
 
 - **Single-user bot**: All operations tied to `ALLOWED_USER_ID`
-- **Action-based**: Claude returns JSON action blocks parsed from markdown code fences
-- **Exception-based tracking**: Skincare and cycling default to "done" unless exceptions reported
-- **Pending plan flow**: Week plans are staged → reviewed → approved before pushing to Google Calendar
-- **Progressive overload**: Main lifts auto-tracked; hitting top of rep range triggers progression prompt
+- **Action-based**: Claude returns JSON action blocks parsed from markdown code fences — this is the only way to persist data
+- **Monolithic prompt**: All action schemas included in every call (no intent-based routing yet — planned for Phase 8 polish)
+- **Pending plan flow**: Week plans are staged → previewed in Telegram → approved before pushing to Google Calendar
+- **Exception-based tracking**: Default assumption is compliance; only deviations are logged
+- **Dual-week templates**: Schedule prompt includes both this week and next week templates so Claude always has correct dates

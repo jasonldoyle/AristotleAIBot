@@ -2,7 +2,7 @@
 
 ## Overview
 
-Plato uses an intent-based prompt system that assembles only the relevant domain schemas and context for each message. This reduces token usage by 50-70% compared to the previous monolithic approach.
+Plato uses a monolithic prompt that assembles all action schemas and context into a single system prompt for every Claude call. This is simple and ensures Claude always has full context.
 
 ## How It Works
 
@@ -10,60 +10,54 @@ Plato uses an intent-based prompt system that assembles only the relevant domain
 User message
     |
     v
-Intent Detection (keyword matching)
-    |
-    v
-Domain Selection (e.g., fitness + schedule)
+build_system_prompt()
     |
     v
 Prompt Assembly:
-  - Base prompt (always included)
-  - Soul doc (always included)
-  - Today's schedule brief (always included)
-  - Overdue tasks brief (always included)
-  - Domain-specific action schemas (only for detected domains)
-  - Domain-specific context (only for detected domains)
+  - Base prompt (personality, role, guidelines)
+  - Soul doc (all tiers, always included)
+  - Active projects with goals
+  - Today's schedule
+  - Weekly template (this week + next week)
+  - Scheduling rules and instructions
+  - All 21 action schemas with trigger conditions
+    |
+    v
+build_messages_with_history()
+  - Last 10 conversation turns
+  - Current user message appended
+    |
+    v
+Claude Sonnet API call
 ```
 
-## Domain Keyword Mapping
+## Prompt Components
 
-| Domain | Keywords |
-|--------|----------|
-| fitness | workout, gym, weight, training, block, lift, squat, bench, nutrition, mfp, skincare, cycling, progress photos, exercise, bulk, cut, protein, calories |
-| schedule | plan, week, schedule, calendar, approve, audrey time, event |
-| projects | project, log, work, coding, nitrogen, glowbook, cfa, plato, leetcode |
-| finance | spend, budget, money, finance, revolut, aib, csv, saving |
-| admin | task, todo, reminder, birthday, recurring, laundry, overdue |
-| ideas | idea, park, parked |
+### Base Prompt (`prompts/base.py`)
+- Plato's personality: stoic mentor, direct, no-nonsense
+- Soul doc entries grouped by tier (lifetime → 5yr → 2yr → 1yr → philosophy → rules)
+- Active projects with slugs and current goals
+- Today's date and schedule
 
-## Assembly Rules
+### Action Schemas (`prompts/__init__.py`)
+- All 21 actions with JSON format, parameters, and `USE WHEN` trigger conditions
+- Critical rules: one action per message, JSON at start of reply, no fake actions in plain text
 
-1. **Always included**: base prompt + soul doc + current date/time
-2. **Always included as brief context**: today's schedule, overdue tasks
-3. **Included per detected domain**: action schemas + full context data
-4. **Fallback**: if no domain detected (general chat), include only base + always-on contexts
-5. **Multi-domain**: if message touches multiple domains, include all relevant ones
+### Schedule Prompt (`calendar.py`)
+- Injected when schedule context is built
+- Contains dual-week templates (this week + next week) with all typed blocks
+- Scheduling rules (12 rules covering block types, project priority, rest, gym, weekend blocks)
+- Response format specification for `plan_week` action
+- Active project list for category assignment
 
 ## File Structure
 
 ```
 plato/prompts/
-  __init__.py      - build_system_prompt(message), build_messages_with_history()
-  base.py          - Core personality, role, guidelines
-  intent.py        - detect_domains(message) -> set of domain names
-  context.py       - Context builders (schedule, overdue tasks, etc.)
-  domains/
-    __init__.py    - Domain registry and get_domain_prompt()
-    fitness.py     - Fitness actions + context
-    schedule.py    - Schedule actions + context
-    projects.py    - Project actions + context
-    finance.py     - Finance actions + context
-    admin.py       - Admin/task actions + context
-    ideas.py       - Idea actions + context
+  __init__.py      — build_system_prompt(), build_messages_with_history(), ACTION_SCHEMA
+  base.py          — get_base_prompt() (personality + soul doc + projects + schedule)
 ```
 
-## Expected Impact
+## Future Consideration
 
-- Typical request: ~5-8KB prompt (down from ~16-20KB)
-- Focused context produces better Claude responses
-- Domain isolation makes adding new actions easier
+Intent-based routing (detecting domains from the message and only including relevant schemas) was considered but not implemented. The current monolithic approach works well for 21 actions. May revisit in Phase 8 (Polish) if token usage becomes an issue.

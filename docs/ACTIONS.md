@@ -1,221 +1,126 @@
 # Actions Reference
 
-All 36 actions Plato can take, grouped by domain.
+All 21 actions Plato currently supports, grouped by domain.
 
-## Projects (7 actions)
+## Soul Doc & Ideas (7 actions)
 
-### 1. `log` - Log work on a project
+### `add_soul` — Store a goal, principle, or rule
 ```json
-{"action": "log", "project_slug": "...", "summary": "...", "duration_mins": null, "blockers": null, "tags": [], "mood": null}
+{"action": "add_soul", "category": "<category>", "content": "<text>"}
 ```
-Tags: coding, marketing, research, design, admin, learning, outreach. Moods: energised, neutral, drained, frustrated, flow.
+Categories: `goal_lifetime`, `goal_5yr`, `goal_2yr`, `goal_1yr`, `philosophy`, `rule`
 
-### 2. `create_project` - Create a new project
+### `update_soul` — Refine an existing soul doc entry
 ```json
-{"action": "create_project", "name": "...", "slug": "...", "intent": "..."}
-```
-
-### 3. `add_soul` - Add soul doc entry
-```json
-{"action": "add_soul", "content": "...", "category": "goal_lifetime|goal_5yr|goal_2yr|goal_1yr|philosophy|rule|anti_pattern", "trigger": "..."}
+{"action": "update_soul", "category": "<category>", "old_content": "<phrase from original>", "content": "<refined text>"}
 ```
 
-### 4. `add_goal` - Set a project goal
+### `query_soul` — Retrieve the full soul doc
 ```json
-{"action": "add_goal", "project_slug": "...", "timeframe": "weekly|monthly|quarterly|milestone", "goal_text": "...", "target_date": null}
+{"action": "query_soul"}
 ```
 
-### 5. `achieve_goal` - Mark a goal achieved
+### `store_idea` — Capture an idea
 ```json
-{"action": "achieve_goal", "project_slug": "...", "goal_fragment": "..."}
+{"action": "store_idea", "idea": "<description>", "context": "<optional>"}
 ```
 
-### 6. `update_project` - Update project details
+### `park_idea` — Park an idea for 14-day cooling
 ```json
-{"action": "update_project", "slug": "...", "updates": {"target_date": null, "estimated_weekly_hours": null, "stick_twist_criteria": null, "alignment_rationale": null}}
+{"action": "park_idea", "idea_id": "<uuid>"}
 ```
 
-### 7. `add_pattern` - Log a recurring behaviour
+### `resolve_idea` — Approve or reject an idea
 ```json
-{"action": "add_pattern", "pattern_type": "blocker|overestimation|external_constraint|bad_habit|avoidance", "description": "...", "project_slug": null}
+{"action": "resolve_idea", "idea_id": "<uuid>", "status": "approved|rejected", "notes": "<optional>"}
 ```
 
-## Schedule (5 actions)
-
-### 8. `plan_week` - Generate weekly schedule for Google Calendar
+### `query_ideas` — List all ideas
 ```json
-{"action": "plan_week", "events": [{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "...", "description": "...", "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco|audrey"}]}
+{"action": "query_ideas"}
 ```
 
-### 9. `audrey_time` - Cancel evening plans for girlfriend time
+## Projects (6 actions)
+
+### `create_project` — Create a new project
 ```json
-{"action": "audrey_time", "date": "YYYY-MM-DD", "from_time": "HH:MM"}
+{"action": "create_project", "name": "<name>", "slug": "<short-slug>", "intent": "<why this project exists>"}
 ```
 
-### 10. `add_event` - Add a one-off calendar event
+### `log_work` — Log a work session
 ```json
-{"action": "add_event", "date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "...", "category": "personal", "description": null}
+{"action": "log_work", "slug": "<project-slug>", "summary": "<what was done>", "duration_mins": "<optional int>", "mood": "<optional>"}
 ```
 
-### 11. `check_in` - Record what happened during a planned block
+### `add_goal` — Set a project goal
 ```json
-{"action": "check_in", "event_id": "uuid-or-null", "status": "completed|partial|skipped", "actual_summary": "...", "gap_reason": "..."}
+{"action": "add_goal", "slug": "<project-slug>", "timeframe": "weekly|monthly|quarterly|milestone", "goal_text": "<the goal>", "target_date": "<optional ISO date>"}
 ```
 
-### 12. `log_fitness` (legacy) - Log exercises
+### `achieve_goal` — Mark a goal as achieved
 ```json
-{"action": "log_fitness", "exercises": [...]}
+{"action": "achieve_goal", "goal_id": "<uuid>"}
 ```
 
-## Fitness (15 actions)
-
-### 13. `log_workout` - Log a training session
+### `update_project` — Change project status
 ```json
-{"action": "log_workout", "session_type": "Push|Legs|Upper Hypertrophy|Shoulders + Arms", "exercises": [{"exercise": "...", "sets": 4, "reps": 8, "weight_kg": 60, "notes": null}], "feedback": "...", "duration_mins": 65, "date": null}
+{"action": "update_project", "slug": "<project-slug>", "status": "active|paused|completed|abandoned"}
 ```
 
-### 14. `daily_log` - Morning check-in / daily data
+### `query_projects` — List all active projects
 ```json
-{"action": "daily_log", "date": null, "weight_kg": 82.1, "steps": null, "sleep_hours": null, "skincare_am": true, "skincare_pm": true, "skincare_notes": null, "cycling_scheduled": false, "cycling_completed": true, "cycling_notes": null, "urticaria_severity": null, "breakout_severity": null, "breakout_location": null, "health_notes": null}
+{"action": "query_projects"}
 ```
 
-### 15. `missed_workout` - Log a missed session
+### `query_project` — Get detail on a specific project
 ```json
-{"action": "missed_workout", "session_type": "Push|Legs|Upper Hypertrophy|Shoulders + Arms", "reason": "...", "date": null}
+{"action": "query_project", "slug": "<project-slug>"}
 ```
 
-### 16. `confirm_lift` - Confirm weight progression on a main lift
+## Schedule & Calendar (7 actions)
+
+### `plan_week` — Generate a full weekly schedule
 ```json
-{"action": "confirm_lift", "lift_key": "incline_bench|barbell_row|squat|ohp"}
+{"action": "plan_week", "week": "this|next", "events": [{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "<title>", "description": "<optional>", "category": "<project-slug>|rest|exercise|personal|citco|audrey"}]}
+```
+Creates a pending plan shown as a preview. Must be approved before pushing to Google Calendar.
+
+### `approve_plan` — Approve a pending plan
+```json
+{"action": "approve_plan"}
+```
+Pushes the pending plan to Google Calendar and stores events in the database.
+
+### `audrey_time` — Clear the evening for girlfriend time
+```json
+{"action": "audrey_time", "date": "YYYY-MM-DD"}
+```
+Cancels all Plato events from 18:00 onwards and creates an "Audrey Time" event.
+
+### `report_deviation` — Log a schedule deviation
+```json
+{"action": "report_deviation", "date": "YYYY-MM-DD", "title": "<keyword from event>", "reason": "<what happened>"}
 ```
 
-### 17. `weekly_fitness_summary` - Weekly fitness review
+### `add_event` — Add a one-off calendar event
 ```json
-{"action": "weekly_fitness_summary", "week_start": "YYYY-MM-DD"}
+{"action": "add_event", "date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "<title>", "category": "personal", "description": "<optional>"}
 ```
 
-### 18. `block_summary` - 4-week training block review
+### `cancel_event` — Cancel a specific event
 ```json
-{"action": "block_summary", "block_id": null}
+{"action": "cancel_event", "date": "YYYY-MM-DD", "title": "<keyword from event title>"}
 ```
 
-### 19. `create_block` - Create a new training block
+### `edit_event` — Move or rename an event
 ```json
-{"action": "create_block", "name": "March 2026", "start_date": "2026-03-02", "end_date": "2026-03-29", "phase": "bulk|mini_cut|final_cut", "calorie_target": 3000, "protein_target": 170, "weight_start": 82.0, "weight_target": 83.0, "cycling_days": ["Mon", "Wed", "Fri"], "notes": null}
+{"action": "edit_event", "date": "YYYY-MM-DD", "title": "<keyword>", "new_date": "<optional>", "new_start": "<optional>", "new_end": "<optional>", "new_title": "<optional>"}
 ```
+Only include fields that are changing.
 
-### 20. `plan_next_block` - Auto-plan next month's block
-```json
-{"action": "plan_next_block", "year": 2026, "month": 3, "weight_start": 82.5}
-```
+## Action Rules
 
-### 21. `todays_workout` - Show today's scheduled session
-```json
-{"action": "todays_workout", "date": null}
-```
-
-### 22. `complete_workout` - Mark session done (exception-based)
-```json
-{"action": "complete_workout", "date": null, "feedback": "...", "exceptions": [{"exercise": "Lateral Raise", "actual_reps": 6, "notes": "..."}]}
-```
-
-### 23. `adjust_exercise` - Change weight for an exercise
-```json
-{"action": "adjust_exercise", "exercise": "Lateral Raise", "new_weight": 8.0, "reason": "..."}
-```
-
-### 24. `progress_photos` - Log that photos were taken
-```json
-{"action": "progress_photos", "date": null, "notes": "Front, side, back"}
-```
-
-### 25. `add_fitness_goal` - Add a fitness goal
-```json
-{"action": "add_fitness_goal", "category": "body_composition|strength|aesthetic|habit|timeline", "goal_text": "...", "target_value": "...", "target_date": "...", "notes": null}
-```
-
-### 26. `achieve_fitness_goal` - Mark a fitness goal achieved
-```json
-{"action": "achieve_fitness_goal", "goal_fragment": "..."}
-```
-
-### 27. `revise_fitness_goal` - Update a fitness goal
-```json
-{"action": "revise_fitness_goal", "goal_fragment": "...", "new_text": "...", "new_target": "..."}
-```
-
-## Finance (2 actions)
-
-### 28. `finance_review` - Spending/savings summary
-```json
-{"action": "finance_review", "year": 2026, "month": 2}
-```
-
-### 29. `set_budget` - Monthly spending limit
-```json
-{"action": "set_budget", "category": "takeaway", "monthly_limit": 100.00}
-```
-
-## Admin (10 actions)
-
-### 30. `add_task` - One-off task
-```json
-{"action": "add_task", "title": "...", "due_date": "2026-02-14", "due_time": null, "category": "personal|shopping|health|admin|social", "priority": "low|normal|high|urgent", "notes": null}
-```
-
-### 31. `complete_task` - Mark task done
-```json
-{"action": "complete_task", "task_fragment": "..."}
-```
-
-### 32. `skip_task` - Skip a task
-```json
-{"action": "skip_task", "task_fragment": "...", "reason": "..."}
-```
-
-### 33. `delete_task` - Remove a task
-```json
-{"action": "delete_task", "task_fragment": "..."}
-```
-
-### 34. `add_recurring` - Recurring task
-```json
-{"action": "add_recurring", "title": "Laundry", "recurring": "weekly|monthly", "recurring_day": "thursday", "category": "personal"}
-```
-
-### 35. `complete_recurring` - Complete this occurrence
-```json
-{"action": "complete_recurring", "task_fragment": "laundry"}
-```
-
-### 36. `delete_recurring` - Remove recurring task permanently
-```json
-{"action": "delete_recurring", "task_fragment": "laundry"}
-```
-
-### 37. `add_date` - Important date (birthday, anniversary)
-```json
-{"action": "add_date", "title": "Mam's birthday", "month": 3, "day": 15, "year": 1970, "category": "birthday|anniversary|deadline|other", "reminder_days": 7, "notes": null}
-```
-
-### 38. `delete_date` - Remove an important date
-```json
-{"action": "delete_date", "title_fragment": "Mam's birthday"}
-```
-
-### 39. `show_tasks` - Display tasks
-```json
-{"action": "show_tasks", "scope": "today|upcoming|all", "days": 7}
-```
-
-## Ideas (2 actions)
-
-### 40. `park_idea` - Park a new idea (14-day cooling period)
-```json
-{"action": "park_idea", "idea": "...", "context": "Why it came up"}
-```
-
-### 41. `resolve_idea` - Approve or reject after cooling
-```json
-{"action": "resolve_idea", "idea_fragment": "...", "status": "approved|rejected", "notes": "Why"}
-```
+- Only ONE action block per message
+- JSON block must be at the very start of the reply, wrapped in ` ```json ... ``` ` fences
+- The JSON block is the ONLY way to persist data — plain text descriptions do not save anything
+- If no action is needed, respond normally without a JSON block

@@ -57,7 +57,7 @@ def get_weekly_template(week_start: datetime) -> dict:
     week_start should be a Monday.
 
     Post-cutover (March 1 2026): Office Tue, Wed, Thu
-    Gym: Mon, Tue 18:00-19:40 | Fri 18:00-19:40 | Sat 07:30-09:00
+    Gym: Mon 18:15-19:20 | Tue 19:45-20:50 | Fri 18:15-19:20 | Sat 11:15-12:20
     Mam driving: Sat 09:15-10:45 + 19:00-20:30, Sun 09:00-10:30 + 19:00-20:30
     Groceries: Sat 10:45-11:15
     """
@@ -123,10 +123,12 @@ def get_weekly_template(week_start: datetime) -> dict:
         else:  # Weekend
             if day_offset == 5:  # Saturday
                 blocks = [
-                    {"start": "07:30", "end": "09:00", "type": "fixed", "label": "Gym session"},
+                    {"start": "07:30", "end": "09:00", "type": "fixed", "label": "Project work"},
                     {"start": "09:15", "end": "10:45", "type": "fixed", "label": "Drive mam to guzheng school"},
                     {"start": "10:45", "end": "11:15", "type": "fixed", "label": "Click & collect groceries"},
-                    {"start": "11:15", "end": "19:00", "type": "free", "label": "Main block (7.75 hrs)"},
+                    {"start": "11:15", "end": "12:20", "type": "fixed", "label": "Gym session"},
+                    {"start": "12:20", "end": "15:00", "type": "free", "label": "Afternoon block (2.67 hrs)"},
+                    {"start": "15:00", "end": "19:00", "type": "fixed", "label": "Project work"},
                     {"start": "19:00", "end": "20:30", "type": "fixed", "label": "Pick up mam from guzheng"},
                     {"start": "20:30", "end": "23:00", "type": "free", "label": "Evening block (2.5 hrs)"},
                 ]
@@ -134,7 +136,7 @@ def get_weekly_template(week_start: datetime) -> dict:
                 blocks = [
                     {"start": "07:30", "end": "09:00", "type": "free", "label": "Early morning (1.5 hrs)"},
                     {"start": "09:00", "end": "10:30", "type": "fixed", "label": "Drive mam to guzheng school"},
-                    {"start": "10:30", "end": "19:00", "type": "free", "label": "Main block (8.5 hrs)"},
+                    {"start": "10:30", "end": "19:00", "type": "fixed", "label": "Project work"},
                     {"start": "19:00", "end": "20:30", "type": "fixed", "label": "Pick up mam from guzheng"},
                     {"start": "20:30", "end": "23:00", "type": "free", "label": "Evening block (2.5 hrs — keep light)"},
                 ]
@@ -261,8 +263,10 @@ def create_weekly_events(service, schedule_events: list) -> int:
 
 
 def get_schedule_prompt(week_start: datetime, active_projects: list[dict] = None) -> str:
-    """Build scheduling context string with template + rules for Claude."""
-    template = get_weekly_template(week_start)
+    """Build scheduling context string with templates for this week + next week + rules for Claude."""
+    this_week_template = get_weekly_template(week_start)
+    next_week_start = week_start + timedelta(days=7)
+    next_week_template = get_weekly_template(next_week_start)
 
     # Build dynamic project allocation rules
     if active_projects:
@@ -280,11 +284,15 @@ def get_schedule_prompt(week_start: datetime, active_projects: list[dict] = None
     return f"""
 ## WEEKLY SCHEDULE PLANNING
 
-You are planning Jason's week starting {week_start.strftime('%A %B %d, %Y')}.
+Below are templates for this week and next week. Use the correct one based on which week Jason asks to plan.
 
-### Weekly Template
-The template below shows Jason's fixed commitments and free blocks. You MUST respect these constraints.
-{json.dumps(template, indent=2)}
+### This Week Template (week of {week_start.strftime('%A %B %d, %Y')})
+{json.dumps(this_week_template, indent=2)}
+
+### Next Week Template (week of {next_week_start.strftime('%A %B %d, %Y')})
+{json.dumps(next_week_template, indent=2)}
+
+CRITICAL: Use the dates from the CORRECT template above. The week runs Monday through Sunday. Every event's "date" field MUST match a date from the chosen template. Do NOT skip Monday. Do NOT include dates outside the 7-day Mon-Sun range.
 
 ### {project_section}
 
@@ -295,24 +303,29 @@ Distribute project time across the week based on their goals and priorities from
 2. Only fill "free" blocks with project work, rest, or personal time
 3. Prioritise projects based on soul doc goals and upcoming deadlines
 4. Rest/downtime — at least 1 hour every evening, one long rest block on weekend
-5. Exercise — gym sessions (Mon, Tue, Fri evenings + Sat morning) are already fixed in the template, do NOT add separate exercise events for those
-6. Keep Sunday evening light — wind down for the work week
-7. Batch similar work: don't alternate between different projects in the same evening
-8. Morning WFH blocks (07:30-09:00) are good for focused study — fresh mind, no distractions
-9. Audrey time may be declared spontaneously — leave some buffer, don't over-optimise
-10. Office days (Tue/Wed/Thu): only the evening post-commute block is free
-11. WFH days (Mon/Fri): morning block + evening block are free
+5. Exercise — gym sessions (Mon, Tue, Fri evenings + Sat after click & collect) are already fixed in the template, do NOT add separate exercise events for those
+6. Weekend project blocks are FIXED: Sat 07:30-09:00, Sat 15:00-19:00, and Sun 10:30-19:00 MUST be project work — use a relevant active project category, NOT rest
+7. Keep Sunday evening light — wind down for the work week
+8. Batch similar work: don't alternate between different projects in the same evening
+9. Morning WFH blocks (07:30-09:00) are good for focused study — fresh mind, no distractions
+10. Audrey time may be declared spontaneously — leave some buffer, don't over-optimise
+11. Office days (Tue/Wed/Thu): only the evening post-commute block is free
+12. WFH days (Mon/Fri): morning block + evening block are free
 
 ### Response Format
-Return a plan_week action with an "events" array. Each event:
+Return a plan_week action with the "week" field set to "this" or "next", plus an "events" array. Each event:
 ```
 {{
-    "date": "YYYY-MM-DD",
-    "start": "HH:MM",
-    "end": "HH:MM",
-    "title": "Short descriptive title",
-    "description": "Optional detail or focus area",
-    "category": "{category_list}|citco|exercise"
+    "action": "plan_week",
+    "week": "this|next",
+    "events": [{{
+        "date": "YYYY-MM-DD",
+        "start": "HH:MM",
+        "end": "HH:MM",
+        "title": "Short descriptive title",
+        "description": "Optional detail or focus area",
+        "category": "{category_list}|citco|exercise"
+    }}]
 }}
 ```
 

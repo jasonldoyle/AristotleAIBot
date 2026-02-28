@@ -98,9 +98,9 @@ USE WHEN: Jason asks about progress on a specific project.
 
 ### plan_week — Plan the weekly schedule
 ```json
-{"action": "plan_week", "events": [{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "Short title", "description": "optional detail", "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco|audrey"}, ...]}
+{"action": "plan_week", "week": "this|next", "events": [{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "Short title", "description": "optional detail", "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco|audrey"}, ...]}
 ```
-USE WHEN: Jason asks to plan/schedule his week. Generate a full week of events respecting the weekly template. Rules: no overlap with work/fixed blocks, CFA minimum 10h, side projects 8-10h, batch similar work, rest minimums, Sunday evening light. Include ALL blocks — study, projects, rest, exercise.
+USE WHEN: Jason asks to plan/schedule his week. Use "week": "this" for the current week, "week": "next" for next week. Default to "this" unless Jason explicitly says "next week". Generate a full week of events respecting the weekly template. Rules: no overlap with work/fixed blocks, CFA minimum 10h, side projects 8-10h, batch similar work, rest minimums, Sunday evening light. Include ALL blocks — study, projects, rest, exercise.
 
 ### approve_plan — Approve a pending weekly plan
 ```json

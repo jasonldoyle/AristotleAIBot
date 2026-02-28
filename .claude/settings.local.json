@@ -6,7 +6,15 @@
       "Bash(find:*)",
       "Bash(python3:*)",
       "Bash(ls:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(alembic stamp:*)",
+      "Bash(alembic upgrade:*)",
+      "Bash(alembic current:*)",
+      "Bash(alembic downgrade:*)",
+      "Bash(git:*)"
     ]
   }
 }

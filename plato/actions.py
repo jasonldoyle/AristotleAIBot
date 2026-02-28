@@ -42,15 +42,13 @@ from plato.calendar import (
 )
 
 
-def _compute_week_start() -> str:
-    """Return next Monday, unless today is Monday (then this Monday)."""
+def _compute_week_start(week: str = "this") -> str:
+    """Return Monday for the requested week. 'this' = current week, 'next' = next week."""
     today = datetime.now()
     weekday = today.weekday()  # 0=Mon
-    if weekday == 0:  # Monday: plan this week
-        return today.strftime("%Y-%m-%d")
-    # Any other day: plan next week
-    days_until_monday = 7 - weekday
-    monday = today + timedelta(days=days_until_monday)
+    monday = today - timedelta(days=weekday)
+    if week == "next":
+        monday += timedelta(days=7)
     return monday.strftime("%Y-%m-%d")
 
 
@@ -134,7 +132,8 @@ def process_action(action: dict) -> str:
 
             case "plan_week":
                 events = action["events"]
-                week_start = _compute_week_start()
+                week = action.get("week", "this")
+                week_start = _compute_week_start(week)
                 plan_id = save_pending_plan(week_start, events)
 
                 # Format preview

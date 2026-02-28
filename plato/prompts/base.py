@@ -6,13 +6,10 @@ from plato.calendar import get_schedule_prompt
 
 
 def _next_week_start() -> datetime:
-    """Return next Monday, unless today is Monday."""
+    """Return this week's Monday (go back to most recent Monday)."""
     today = datetime.now()
     weekday = today.weekday()
-    if weekday == 0:
-        return today.replace(hour=0, minute=0, second=0, microsecond=0)
-    days_until_monday = 7 - weekday
-    monday = today + timedelta(days=days_until_monday)
+    monday = today - timedelta(days=weekday)
     return monday.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
