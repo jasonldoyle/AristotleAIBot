@@ -1,6 +1,6 @@
 # Actions Reference
 
-All 21 actions Plato currently supports, grouped by domain.
+All 29 actions Plato currently supports, grouped by domain.
 
 ## Soul Doc & Ideas (7 actions)
 
@@ -117,6 +117,54 @@ Cancels all Plato events from 18:00 onwards and creates an "Audrey Time" event.
 {"action": "edit_event", "date": "YYYY-MM-DD", "title": "<keyword>", "new_date": "<optional>", "new_start": "<optional>", "new_end": "<optional>", "new_title": "<optional>"}
 ```
 Only include fields that are changing.
+
+## Fitness (8 actions)
+
+### `log_workout` — Log exercise numbers or session variations
+```json
+{"action": "log_workout", "day_label": "day1_chest|day2_back|day3_legs|day4_shoulders", "date": "YYYY-MM-DD", "status": "completed|partial|deload", "feedback": "<optional>", "lifts": [{"exercise": "<slug>", "sets": 4, "reps": 8, "weight_kg": 80.0, "rpe": 8}]}
+```
+Only use when there's something worth recording — silence means compliance.
+
+### `missed_workout` — Log a missed session
+```json
+{"action": "missed_workout", "day_label": "<day_label>", "date": "YYYY-MM-DD", "reason": "<optional>"}
+```
+
+### `log_weight` — Weekly weigh-in
+```json
+{"action": "log_weight", "weight_kg": 82.3, "date": "YYYY-MM-DD", "notes": "<optional>"}
+```
+Returns trend (4-week avg, rate/week) and current phase context.
+
+### `log_nutrition` — Monthly nutrition summary
+```json
+{"action": "log_nutrition", "month": "YYYY-MM", "avg_calories": 2850, "avg_protein_g": 172, "avg_carbs_g": 300, "avg_fat_g": 70, "notes": "<optional>"}
+```
+
+### `log_sleep` — Daily sleep hours
+```json
+{"action": "log_sleep", "hours": 7.5, "date": "YYYY-MM-DD", "notes": "<optional>"}
+```
+Flags if 7-day average drops below 7 hours.
+
+### `modify_workout` — Adjust the workout template
+```json
+{"action": "modify_workout", "exercise": "<slug>", "modification_type": "reduce_volume|increase_volume|swap|adjust_weight|skip|custom", "detail": "<description>", "reason": "<optional>", "valid_from": "YYYY-MM-DD", "valid_until": "YYYY-MM-DD|null"}
+```
+`valid_until`: null for permanent changes.
+
+### `override_block` — Deviate from the planned phase timeline
+```json
+{"action": "override_block", "name": "<block name>", "phase": "bulk|mini_cut|final_cut|maintenance", "start_date": "YYYY-MM-DD", "calorie_target": 2400, "protein_target": 180, "fat_min": 50, "fat_max": 70, "notes": "<optional>"}
+```
+Rarely needed — phases auto-apply by date.
+
+### `query_fitness` — Get fitness status
+```json
+{"action": "query_fitness"}
+```
+Returns phase, today's workout, weight trend, sleep avg, active mods, recent sessions.
 
 ## Action Rules
 

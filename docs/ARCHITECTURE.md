@@ -12,7 +12,7 @@ plato_bot.py          → Application setup, command/message handlers
 plato/handlers.py     → Auth check, conversation history, Claude API calls
     |
     v
-plato/prompts/        → System prompt assembly (base + soul doc + projects + schedule + action schemas)
+plato/prompts/        → System prompt assembly (base + soul doc + projects + schedule + fitness + action schemas)
     |
     v
 Claude Sonnet API     → Returns text + optional JSON action block
@@ -49,8 +49,8 @@ plato_bot.py
 ### prompts/ (package)
 - `build_system_prompt()` — Assembles base prompt + action schemas
 - `build_messages_with_history()` — Last 10 conversation turns for Claude context
-- `get_base_prompt()` — Personality, soul doc injection, active projects, today's schedule
-- Action schemas define all 21 actions with parameters, categories, and trigger conditions
+- `get_base_prompt()` — Personality, soul doc injection, active projects, today's schedule, fitness status
+- Action schemas define all 29 actions with parameters, categories, and trigger conditions
 
 ### actions.py
 - `process_action(action_data, raw_message)` — Match statement dispatching to per-action handlers
@@ -69,9 +69,10 @@ plato_bot.py
 - `ideas.py` — Idea parking lot
 - `projects.py` — Projects, goals, work logs
 - `schedule.py` — Schedule events, pending plans, deviations
+- `fitness.py` — Training sessions, exercises, weight, nutrition, sleep, modifications, phase timeline
 
 ### models.py
-SQLAlchemy models for all 9 tables: `Conversation`, `SoulDoc`, `Idea`, `Project`, `ProjectGoal`, `ProjectLog`, `ScheduleEvent`, `PendingPlan`
+SQLAlchemy models for all 17 tables: `Conversation`, `SoulDoc`, `Idea`, `Project`, `ProjectGoal`, `ProjectLog`, `ScheduleEvent`, `PendingPlan`, `TrainingBlock`, `WorkoutSession`, `ExerciseLog`, `WorkoutModification`, `WeighIn`, `NutritionLog`, `SleepLog`, `DeloadTracker`
 
 ## Design Decisions
 
@@ -79,5 +80,6 @@ SQLAlchemy models for all 9 tables: `Conversation`, `SoulDoc`, `Idea`, `Project`
 - **Action-based**: Claude returns JSON action blocks parsed from markdown code fences — this is the only way to persist data
 - **Monolithic prompt**: All action schemas included in every call (no intent-based routing yet — planned for Phase 8 polish)
 - **Pending plan flow**: Week plans are staged → previewed in Telegram → approved before pushing to Google Calendar
-- **Exception-based tracking**: Default assumption is compliance; only deviations are logged
+- **Exception-based tracking**: Default assumption is compliance; only deviations are logged (schedule and fitness)
 - **Dual-week templates**: Schedule prompt includes both this week and next week templates so Claude always has correct dates
+- **Auto-derived phases**: Fitness training phases are hardcoded in a timeline and auto-applied by date; override action only needed when deviating
