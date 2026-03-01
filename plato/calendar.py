@@ -99,7 +99,7 @@ def get_weekly_template(week_start: datetime) -> dict:
             else:
                 if is_gym_day:
                     blocks = [
-                        {"start": "07:30", "end": "09:00", "type": "free", "label": "Morning block (1.5 hrs)"},
+                        {"start": "07:30", "end": "09:00", "type": "fixed", "label": "Personal morning — do not schedule"},
                         {"start": "09:00", "end": "18:00", "type": "work", "label": "Citco (WFH)"},
                         {"start": "18:00", "end": "18:15", "type": "commute", "label": "Travel to gym"},
                         {"start": "18:15", "end": "19:20", "type": "fixed", "label": "Gym session"},
@@ -108,7 +108,7 @@ def get_weekly_template(week_start: datetime) -> dict:
                     ]
                 else:
                     blocks = [
-                        {"start": "07:30", "end": "09:00", "type": "free", "label": "Morning block (1.5 hrs)"},
+                        {"start": "07:30", "end": "09:00", "type": "fixed", "label": "Personal morning — do not schedule"},
                         {"start": "09:00", "end": "18:00", "type": "work", "label": "Citco (WFH)"},
                         {"start": "18:00", "end": "23:00", "type": "free", "label": "Evening block (5 hrs)"},
                     ]
@@ -123,18 +123,20 @@ def get_weekly_template(week_start: datetime) -> dict:
         else:  # Weekend
             if day_offset == 5:  # Saturday
                 blocks = [
-                    {"start": "07:30", "end": "09:00", "type": "fixed", "label": "Project work"},
+                    {"start": "07:30", "end": "09:00", "type": "fixed", "label": "Personal morning — do not schedule"},
                     {"start": "09:15", "end": "10:45", "type": "fixed", "label": "Drive mam to guzheng school"},
                     {"start": "10:45", "end": "11:15", "type": "fixed", "label": "Click & collect groceries"},
-                    {"start": "11:15", "end": "12:20", "type": "fixed", "label": "Gym session"},
-                    {"start": "12:20", "end": "15:00", "type": "free", "label": "Afternoon block (2.67 hrs)"},
+                    {"start": "11:15", "end": "11:30", "type": "commute", "label": "Travel to gym"},
+                    {"start": "11:30", "end": "12:35", "type": "fixed", "label": "Gym session"},
+                    {"start": "12:35", "end": "12:50", "type": "commute", "label": "Travel home from gym"},
+                    {"start": "12:50", "end": "15:00", "type": "free", "label": "Afternoon block (2.2 hrs)"},
                     {"start": "15:00", "end": "19:00", "type": "fixed", "label": "Project work"},
                     {"start": "19:00", "end": "20:30", "type": "fixed", "label": "Pick up mam from guzheng"},
                     {"start": "20:30", "end": "23:00", "type": "free", "label": "Evening block (2.5 hrs)"},
                 ]
             else:  # Sunday
                 blocks = [
-                    {"start": "07:30", "end": "09:00", "type": "free", "label": "Early morning (1.5 hrs)"},
+                    {"start": "07:30", "end": "09:00", "type": "fixed", "label": "Personal morning — do not schedule"},
                     {"start": "09:00", "end": "10:30", "type": "fixed", "label": "Drive mam to guzheng school"},
                     {"start": "10:30", "end": "19:00", "type": "fixed", "label": "Project work"},
                     {"start": "19:00", "end": "20:30", "type": "fixed", "label": "Pick up mam from guzheng"},
@@ -180,8 +182,8 @@ def cancel_evening_events(service, date_str: str, from_time: str = "18:00"):
 
     events_result = service.events().list(
         calendarId='primary',
-        timeMin=f'{date_str}T{from_time}:00',
-        timeMax=f'{date_str}T23:59:00',
+        timeMin=f'{date_str}T{from_time}:00+00:00',
+        timeMax=f'{date_str}T23:59:00+00:00',
         timeZone='Europe/Dublin',
         singleEvents=True,
         q='[Plato]'
@@ -200,8 +202,8 @@ def cancel_specific_event(service, date_str: str, title_keyword: str):
     """Cancel a specific [Plato] event matching date + title keyword. Returns cancelled title or None."""
     events_result = service.events().list(
         calendarId='primary',
-        timeMin=f'{date_str}T00:00:00',
-        timeMax=f'{date_str}T23:59:00',
+        timeMin=f'{date_str}T00:00:00+00:00',
+        timeMax=f'{date_str}T23:59:00+00:00',
         timeZone='Europe/Dublin',
         singleEvents=True,
         q='[Plato]'
@@ -304,13 +306,14 @@ Distribute project time across the week based on their goals and priorities from
 3. Prioritise projects based on soul doc goals and upcoming deadlines
 4. Rest/downtime — at least 1 hour every evening, one long rest block on weekend
 5. Exercise — gym sessions (Mon, Tue, Fri evenings + Sat after click & collect) are already fixed in the template, do NOT add separate exercise events for those
-6. Weekend project blocks are FIXED: Sat 07:30-09:00, Sat 15:00-19:00, and Sun 10:30-19:00 MUST be project work — use a relevant active project category, NOT rest
+6. Weekend project blocks are FIXED: Sat 15:00-19:00 and Sun 10:30-19:00 MUST be project work — use a relevant active project category, NOT rest
 7. Keep Sunday evening light — wind down for the work week
 8. Batch similar work: don't alternate between different projects in the same evening
-9. Morning WFH blocks (07:30-09:00) are good for focused study — fresh mind, no distractions
+9. WFH mornings (07:30-09:00) are FIXED personal time — do NOT schedule anything there
 10. Audrey time may be declared spontaneously — leave some buffer, don't over-optimise
 11. Office days (Tue/Wed/Thu): only the evening post-commute block is free
-12. WFH days (Mon/Fri): morning block + evening block are free
+12. WFH days (Mon/Fri): only the evening block is free (morning is personal time)
+13. Keep project event titles simple — use the project name + general focus area from goals, do NOT invent specific tasks or subtasks that aren't in the project's goals
 
 ### Response Format
 Return a plan_week action with the "week" field set to "this" or "next", plus an "events" array. Each event:
@@ -331,7 +334,8 @@ Return a plan_week action with the "week" field set to "this" or "next", plus an
 
 IMPORTANT: Include EVERY block for ALL 7 days (Monday through Sunday) in the events array — this builds a COMPLETE calendar for the week:
 - Work blocks (category: "citco") — e.g. "Citco (Office)" or "Citco (WFH)"
-- Commute blocks (category: "citco") — e.g. "Commute to office", "Commute home"
+- Work commute blocks (category: "citco") — e.g. "Commute to office", "Commute home"
+- Gym travel blocks (category: "exercise") — e.g. "Travel to gym", "Travel home from gym"
 - Gym sessions (category: "exercise") — from the template's fixed blocks
 - Mam driving (category: "personal") — from the template's fixed blocks
 - Groceries (category: "personal") — from the template

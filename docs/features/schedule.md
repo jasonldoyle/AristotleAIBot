@@ -42,7 +42,7 @@ Each day is built from typed blocks. The scheduler never fills over non-free blo
 ### Monday (WFH + Gym)
 
 ```
-07:30 - 09:00   free           Morning block (1.5 hrs)
+07:30 - 09:00   fixed          Personal morning — do not schedule
 09:00 - 18:00   work           Citco (WFH)
 18:00 - 18:15   commute        Travel to gym
 18:15 - 19:20   fixed          Gym session
@@ -84,22 +84,24 @@ Same block structure as Monday.
 ### Saturday
 
 ```
-07:30 - 09:00   fixed          Project work
+07:30 - 09:00   fixed          Personal morning — do not schedule
 09:15 - 10:45   fixed          Drive mam to guzheng school
 10:45 - 11:15   fixed          Click & collect groceries
-11:15 - 12:20   fixed          Gym session
-12:20 - 15:00   free           Afternoon block (2.67 hrs)
+11:15 - 11:30   commute        Travel to gym
+11:30 - 12:35   fixed          Gym session
+12:35 - 12:50   commute        Travel home from gym
+12:50 - 15:00   free           Afternoon block (2.2 hrs)
 15:00 - 19:00   fixed          Project work
 19:00 - 20:30   fixed          Pick up mam from guzheng
 20:30 - 23:00   free           Evening block (2.5 hrs)
 ```
 
-Saturday has two dedicated project work blocks (morning + afternoon) locked as fixed so Claude always assigns project work to them.
+Saturday has a dedicated afternoon project work block (15:00-19:00) locked as fixed so Claude always assigns project work to it.
 
 ### Sunday
 
 ```
-07:30 - 09:00   free           Early morning (1.5 hrs)
+07:30 - 09:00   fixed          Personal morning — do not schedule
 09:00 - 10:30   fixed          Drive mam to guzheng school
 10:30 - 19:00   fixed          Project work
 19:00 - 20:30   fixed          Pick up mam from guzheng
@@ -117,11 +119,14 @@ Claude follows these rules when filling free blocks:
 3. Prioritise projects based on soul doc goals and deadlines
 4. At least 1 hour rest every evening
 5. Gym sessions are pre-set in the template — no duplicates
-6. Weekend project blocks (Sat 07:30-09:00, Sat 15:00-19:00, Sun 10:30-19:00) are always project work
+6. Weekend project blocks (Sat 15:00-19:00, Sun 10:30-19:00) are always project work
 7. Sunday evening is kept light
 8. Batch similar work — don't alternate projects in the same evening
-9. WFH mornings (07:30-09:00) are ideal for focused study
+9. All mornings (07:30-09:00) on WFH days and weekends are fixed personal time — never schedule anything there
 10. Leave buffer for spontaneous Audrey time
+11. Office days (Tue/Wed/Thu): only the evening post-commute block is free
+12. WFH days (Mon/Fri): only the evening block is free (morning is personal time)
+13. Keep project event titles simple — use the project name + general focus area, don't invent specific subtasks
 
 ## Google Calendar Integration
 

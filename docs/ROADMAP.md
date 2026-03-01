@@ -141,8 +141,9 @@ Key difference from v1: Context is **summarized before injection**, not dumped r
 - `plato/handlers.py` — **Edited.** max_tokens increased from 1024 to 4096
 
 ### Hard-coded weekly template (in `get_weekly_template()`):
+- Personal mornings: 07:30-09:00 on all WFH days (Mon/Fri) and weekends (Sat/Sun) — fixed, never scheduled
 - Work: 9-18 (WFH Mon/Fri, Office Tue/Wed/Thu with commute blocks)
-- Gym: Mon 18:00-19:20 (WFH), Tue 19:45-20:50 (post-office), Fri 18:00-19:20 (WFH), Sat 11:15-12:20 (after click & collect)
+- Gym: Mon 18:00-19:20 (WFH), Tue 19:45-20:50 (post-office), Fri 18:00-19:20 (WFH), Sat 11:30-12:35 (after click & collect, with travel blocks)
 - Mam driving: Sat 09:15-10:45 + 19:00-20:30, Sun 09:00-10:30 + 19:00-20:30
 - Groceries: Sat 10:45-11:15
 - Free blocks filled by Claude with active projects, rest, personal time
@@ -174,21 +175,23 @@ Key difference from v1: Context is **summarized before injection**, not dumped r
 - Claude only schedules active projects (no phantom CFA when not an active project)
 - Week start logic plans next week (not current week mid-way through)
 
-### Remaining tests (not yet verified via Telegram):
-- `audrey_time` — "Audrey time tonight" cancels evening events from DB + Google Calendar
-- `add_event` — "Dentist Thursday at 2pm for an hour" creates one-off event
-- `cancel_event` — "Cancel the Plato session on Wednesday" removes specific event
-- `edit_event` — "Move Saturday Plato to Sunday morning" reschedules event
-- `report_deviation` — via Telegram (verified in code, not yet via bot)
-- Plan revision flow — "Plan my week" → see plan → "Swap X and Y on Wednesday" → revised plan
-- End-of-day deviation nudge (not yet implemented — Phase 6)
-
 ### Verified via Telegram:
 - All 7 days appear in generated plan (Monday through Sunday)
 - All 4 gym sessions appear (Mon/Tue/Fri evenings + Sat 11:15)
 - "Plan next week" produces correct Mon-Sun dates
-- Weekend project blocks (Sat morning, Sat 15-19, Sun 10:30-19) correctly assigned as project work
+- Weekend project blocks (Sat 15-19, Sun 10:30-19) correctly assigned as project work
 - Dual-week template fix prevents day-shift bug when planning next week
+- `plan_week` → full week generated, all fixed blocks respected, free blocks filled with projects/rest
+- `approve_plan` → old Plato events cleared, new events pushed to Google Calendar with correct times, colors, and [Plato] prefix
+- `audrey_time` → "Audrey time tonight" cancels evening events from DB + Google Calendar
+- `add_event` → "Cinema date Thursday" creates one-off event in DB + Google Calendar
+- `cancel_event` → "Cancel the Plato session on Wednesday" removes specific event from DB + Google Calendar
+- `edit_event` → "Move Saturday Plato to start at 16:00" reschedules event in DB + Google Calendar
+- `report_deviation` → Deviation logged with reason against matching event
+- Plan revision flow → "Plan my week" → see plan → request changes → Claude regenerates plan with adjustments
+
+### Not yet implemented (deferred to Phase 6):
+- End-of-day deviation nudge
 
 ### Known issues resolved during implementation:
 1. Week start logic initially planned current week — fixed to always plan next Monday
@@ -197,6 +200,12 @@ Key difference from v1: Context is **summarized before injection**, not dumped r
 4. Tuesday gym missing from template — fixed: office gym days now have post-commute gym at 19:45
 5. Google Calendar token expired — re-authed, app published to production (permanent token)
 6. Migration failed on first run (tables existed from old code) — added DROP IF EXISTS
+7. WFH/weekend mornings (07:30-09:00) were marked as `free` — fixed to `fixed` personal time so Claude never schedules over them
+8. Saturday gym session missing travel blocks — added 15min commute blocks before/after gym
+9. Gym travel blocks categorized as "citco" — fixed prompt to distinguish work commute (citco) vs gym travel (exercise)
+10. `cancel_evening_events()` and `cancel_specific_event()` missing timezone offset — Google Calendar API returned 400 Bad Request. Fixed by adding `+00:00` to timeMin/timeMax
+11. `load_dotenv()` didn't override empty env vars set by shell — fixed with `load_dotenv(override=True)` in config.py
+12. Claude invented specific subtask titles for project sessions — added scheduling rule to keep titles simple
 
 ---
 
