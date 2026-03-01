@@ -31,7 +31,7 @@ Plato is a personal AI mentor Telegram bot that uses Claude Sonnet to hold Jason
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `ALLOWED_USER_ID` | Jason's Telegram user ID (single-user bot) |
 
-## Current Features (Phases 0-3)
+## Current Features (Phases 0-4)
 
 ### Soul Doc
 Life goals and principles stored by tier, referenced in every Claude response.
@@ -49,6 +49,9 @@ Generate complete weekly calendars respecting fixed commitments (work, gym, fami
 
 ### Calendar Management
 Add, edit, cancel individual events. Audrey time clears evenings. Deviation tracking logs what changed.
+
+### Fitness
+2-year periodised training program with exception-based logging. Tracks workouts (4-day split), weekly weight, monthly nutrition, sleep, and workout modifications. Phases auto-derive from a hardcoded timeline — only deviations are logged.
 
 See `docs/features/` for detailed documentation on each feature.
 
@@ -76,13 +79,21 @@ Telegram message
 | `project_logs` | 003 | Work session logs |
 | `schedule_events` | 004 | Calendar events with status tracking |
 | `pending_plans` | 004 | Staged weekly plans awaiting approval |
+| `training_blocks` | 005 | Periodised training phases (bulk/cut) |
+| `workout_sessions` | 005 | Gym sessions (only logged on deviation) |
+| `exercise_logs` | 005 | Individual exercise numbers |
+| `workout_modifications` | 005 | Persistent adjustments to workout template |
+| `weigh_ins` | 005 | Weekly weight tracking |
+| `nutrition_logs` | 005 | Monthly nutrition summaries |
+| `sleep_logs` | 005 | Daily sleep hours |
+| `deload_tracker` | 005 | 8-week deload cycle tracking |
 
 ## Project Structure
 
 ```
 plato/
 ├── config.py          # Env vars, DB engine, Anthropic client
-├── models.py          # SQLAlchemy models (9 tables)
+├── models.py          # SQLAlchemy models (17 tables)
 ├── handlers.py        # Telegram message handlers
 ├── actions.py         # Action router (JSON → DB + Calendar operations)
 ├── calendar.py        # Google Calendar integration + schedule templates
@@ -91,8 +102,9 @@ plato/
 │   ├── soul.py        # Soul doc CRUD
 │   ├── ideas.py       # Ideas CRUD
 │   ├── projects.py    # Projects, goals, work logs
-│   └── schedule.py    # Schedule events, pending plans, deviations
+│   ├── schedule.py    # Schedule events, pending plans, deviations
+│   └── fitness.py     # Training, weight, nutrition, sleep, modifications
 └── prompts/
-    ├── base.py        # Base personality + soul doc + projects + schedule injection
+    ├── base.py        # Base personality + soul doc + projects + schedule + fitness injection
     └── __init__.py    # System prompt builder + action schemas
 ```
