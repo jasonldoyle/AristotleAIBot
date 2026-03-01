@@ -29,6 +29,21 @@ from plato.db import (
     update_schedule_event,
     save_schedule_event,
     report_deviation as db_report_deviation,
+    # Fitness
+    get_or_create_session,
+    log_session,
+    log_exercises_bulk,
+    log_weigh_in,
+    get_weight_trend,
+    log_monthly_nutrition,
+    log_sleep,
+    get_sleep_average,
+    create_modification,
+    create_override_block,
+    get_current_block,
+    format_fitness_detail,
+    TRAINING_SPLIT,
+    DAY_WEEKDAY_MAP,
 )
 from plato.calendar import (
     get_calendar_service,
@@ -266,6 +281,122 @@ def process_action(action: dict) -> str:
                     return f"Event updated in DB, but calendar sync failed: {e}"
 
                 return f"Event updated: '{old['title']}' on {date_str} -> '{new_title or old['title']}' on {new_date} {new_start or old['start_time']}-{new_end or old['end_time']}."
+
+            # --- Fitness actions ---
+
+            case "log_workout":
+                date_str = action.get("date", datetime.now().strftime("%Y-%m-%d"))
+                day_label = action["day_label"]
+                status = action.get("status", "completed")
+                feedback = action.get("feedback")
+                lifts = action.get("lifts", [])
+
+                # Create or get session
+                ws = get_or_create_session(date_str, day_label)
+                # Update status/feedback if session was auto-created as completed
+                if status != "completed" or feedback:
+                    log_session(date_str, day_label, status=status, feedback=feedback,
+                                deviation_notes=action.get("deviation_notes"))
+
+                # Log any lifts
+                count = 0
+                if lifts:
+                    count = log_exercises_bulk(ws["id"], lifts)
+
+                parts = [f"Workout logged: {day_label} on {date_str} [{status}]"]
+                if count:
+                    parts.append(f"{count} exercise(s) recorded")
+                if feedback:
+                    parts.append(f"Feedback: {feedback}")
+                return ". ".join(parts) + "."
+
+            case "missed_workout":
+                date_str = action.get("date", datetime.now().strftime("%Y-%m-%d"))
+                day_label = action["day_label"]
+                reason = action.get("reason", "")
+                log_session(date_str, day_label, status="missed", deviation_notes=reason)
+                day_info = TRAINING_SPLIT.get(day_label, {})
+                label = day_info.get("label", day_label)
+                return f"Missed session logged: {label} on {date_str}. {('Reason: ' + reason) if reason else 'No reason given.'}"
+
+            case "log_weight":
+                date_str = action.get("date", datetime.now().strftime("%Y-%m-%d"))
+                weight_kg = action["weight_kg"]
+                log_weigh_in(date_str, weight_kg, action.get("notes"))
+                trend = get_weight_trend()
+                block = get_current_block()
+                parts = [f"Weight logged: {weight_kg}kg on {date_str}"]
+                if trend["avg_4wk"]:
+                    parts.append(f"4-wk avg: {trend['avg_4wk']}kg")
+                if trend["rate_per_week"] is not None:
+                    sign = "+" if trend["rate_per_week"] > 0 else ""
+                    parts.append(f"rate: {sign}{trend['rate_per_week']}kg/wk")
+                if block:
+                    parts.append(f"phase: {block['name']}")
+                return " | ".join(parts)
+
+            case "log_nutrition":
+                month = action["month"]
+                log_monthly_nutrition(
+                    month,
+                    avg_calories=action.get("avg_calories"),
+                    avg_protein_g=action.get("avg_protein_g"),
+                    avg_carbs_g=action.get("avg_carbs_g"),
+                    avg_fat_g=action.get("avg_fat_g"),
+                    notes=action.get("notes"),
+                )
+                block = get_current_block()
+                parts = [f"Nutrition logged for {month}"]
+                if action.get("avg_calories"):
+                    parts.append(f"{action['avg_calories']} kcal")
+                if action.get("avg_protein_g"):
+                    parts.append(f"{action['avg_protein_g']}g protein")
+                if block and block["calorie_target"]:
+                    diff = (action.get("avg_calories") or 0) - block["calorie_target"]
+                    if diff != 0:
+                        sign = "+" if diff > 0 else ""
+                        parts.append(f"{sign}{diff} vs target {block['calorie_target']}")
+                return " | ".join(parts)
+
+            case "log_sleep":
+                date_str = action.get("date", datetime.now().strftime("%Y-%m-%d"))
+                hours = action["hours"]
+                log_sleep(date_str, hours, action.get("notes"))
+                avg = get_sleep_average()
+                parts = [f"Sleep logged: {hours}h on {date_str}"]
+                if avg["avg"]:
+                    parts.append(f"7-day avg: {avg['avg']}h")
+                    if avg["below_7"]:
+                        parts.append("⚠ below 7h target")
+                return " | ".join(parts)
+
+            case "modify_workout":
+                mod_id = create_modification(
+                    exercise=action["exercise"],
+                    modification_type=action["modification_type"],
+                    detail=action["detail"],
+                    reason=action.get("reason"),
+                    valid_from=action.get("valid_from"),
+                    valid_until=action.get("valid_until"),
+                )
+                until_str = action.get("valid_until") or "permanent"
+                return f"Workout modification created: {action['exercise']} → {action['detail']} (from {action.get('valid_from', 'today')}, {until_str})."
+
+            case "override_block":
+                block_id = create_override_block(
+                    name=action["name"],
+                    phase=action["phase"],
+                    start_date=action["start_date"],
+                    calorie_target=action.get("calorie_target"),
+                    protein_target=action.get("protein_target"),
+                    fat_min=action.get("fat_min"),
+                    fat_max=action.get("fat_max"),
+                    notes=action.get("notes"),
+                )
+                return f"Phase override created: {action['name']} ({action['phase']}) starting {action['start_date']}."
+
+            case "query_fitness":
+                return format_fitness_detail()
 
             case _:
                 logger.warning(f"Unknown action type: {action_type}")
