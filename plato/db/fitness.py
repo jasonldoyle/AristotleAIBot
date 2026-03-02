@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from plato.config import SessionLocal
 from plato.models import (
     TrainingBlock, WorkoutSession, ExerciseLog, WorkoutModification,
-    WeighIn, NutritionLog, SleepLog, DeloadTracker,
+    WeighIn, DailyNutrition, SleepLog, DeloadTracker,
 )
 
 
@@ -457,53 +457,96 @@ def get_weight_trend() -> dict:
 # Nutrition (monthly)
 # ---------------------------------------------------------------------------
 
-def log_monthly_nutrition(month: str, avg_calories: int = None,
-                          avg_protein_g: int = None, avg_carbs_g: int = None,
-                          avg_fat_g: int = None, notes: str = None) -> str:
-    """Log or update monthly nutrition. Upserts on month. Returns ID."""
+def log_daily_nutrition(date: str, calories: int, protein_g: int,
+                        carbs_g: int, fat_g: int) -> str:
+    """Upsert a single daily nutrition entry. Returns ID."""
     block = get_current_block()
     block_id = block["id"] if block else None
     with SessionLocal() as session:
-        existing = session.query(NutritionLog).filter_by(month=month).first()
+        existing = session.query(DailyNutrition).filter_by(date=date).first()
         if existing:
-            if avg_calories is not None:
-                existing.avg_calories = avg_calories
-            if avg_protein_g is not None:
-                existing.avg_protein_g = avg_protein_g
-            if avg_carbs_g is not None:
-                existing.avg_carbs_g = avg_carbs_g
-            if avg_fat_g is not None:
-                existing.avg_fat_g = avg_fat_g
-            if notes is not None:
-                existing.notes = notes
+            existing.calories = calories
+            existing.protein_g = protein_g
+            existing.carbs_g = carbs_g
+            existing.fat_g = fat_g
             existing.block_id = block_id
             session.commit()
             return str(existing.id)
 
-        nl = NutritionLog(
-            month=month, avg_calories=avg_calories,
-            avg_protein_g=avg_protein_g, avg_carbs_g=avg_carbs_g,
-            avg_fat_g=avg_fat_g, block_id=block_id, notes=notes,
+        dn = DailyNutrition(
+            date=date, calories=calories, protein_g=protein_g,
+            carbs_g=carbs_g, fat_g=fat_g, block_id=block_id,
         )
-        session.add(nl)
+        session.add(dn)
         session.commit()
-        return str(nl.id)
+        return str(dn.id)
 
 
-def get_recent_nutrition(limit: int = 3) -> list[dict]:
-    """Get recent monthly nutrition logs."""
+def log_nutrition_batch(entries: list[dict]) -> int:
+    """Upsert multiple daily nutrition entries. Returns count."""
+    block = get_current_block()
+    block_id = block["id"] if block else None
+    count = 0
+    with SessionLocal() as session:
+        for entry in entries:
+            existing = session.query(DailyNutrition).filter_by(date=entry["date"]).first()
+            if existing:
+                existing.calories = entry["calories"]
+                existing.protein_g = entry["protein_g"]
+                existing.carbs_g = entry["carbs_g"]
+                existing.fat_g = entry["fat_g"]
+                existing.block_id = block_id
+            else:
+                dn = DailyNutrition(
+                    date=entry["date"], calories=entry["calories"],
+                    protein_g=entry["protein_g"], carbs_g=entry["carbs_g"],
+                    fat_g=entry["fat_g"], block_id=block_id,
+                )
+                session.add(dn)
+            count += 1
+        session.commit()
+    return count
+
+
+def get_nutrition_averages(days: int = 7) -> dict:
+    """Get nutrition averages over the last N logged days."""
     with SessionLocal() as session:
         rows = (
-            session.query(NutritionLog)
-            .order_by(NutritionLog.month.desc())
+            session.query(DailyNutrition)
+            .order_by(DailyNutrition.date.desc())
+            .limit(days)
+            .all()
+        )
+        if not rows:
+            return {"avg_calories": None, "avg_protein_g": None,
+                    "avg_carbs_g": None, "avg_fat_g": None, "count": 0}
+
+        n = len(rows)
+        return {
+            "avg_calories": round(sum(r.calories for r in rows) / n),
+            "avg_protein_g": round(sum(r.protein_g for r in rows) / n),
+            "avg_carbs_g": round(sum(r.carbs_g for r in rows) / n),
+            "avg_fat_g": round(sum(r.fat_g for r in rows) / n),
+            "count": n,
+            "from_date": rows[-1].date,
+            "to_date": rows[0].date,
+        }
+
+
+def get_daily_nutrition(limit: int = 14) -> list[dict]:
+    """Get recent daily nutrition entries."""
+    with SessionLocal() as session:
+        rows = (
+            session.query(DailyNutrition)
+            .order_by(DailyNutrition.date.desc())
             .limit(limit)
             .all()
         )
         return [
             {
-                "month": r.month, "avg_calories": r.avg_calories,
-                "avg_protein_g": r.avg_protein_g, "avg_carbs_g": r.avg_carbs_g,
-                "avg_fat_g": r.avg_fat_g, "notes": r.notes,
+                "date": r.date, "calories": r.calories,
+                "protein_g": r.protein_g, "carbs_g": r.carbs_g,
+                "fat_g": r.fat_g,
             }
             for r in rows
         ]
@@ -702,6 +745,17 @@ def format_fitness_summary() -> str:
         warning = " ⚠ below 7h" if sleep["below_7"] else ""
         lines.append(f"**Sleep:** 7-day avg: {sleep['avg']}h{warning}")
 
+    # Nutrition (7-day avg)
+    nut_avg = get_nutrition_averages(days=7)
+    if nut_avg["avg_calories"]:
+        nut_parts = [f"{nut_avg['avg_calories']} kcal", f"{nut_avg['avg_protein_g']}g protein",
+                     f"{nut_avg['avg_carbs_g']}g carbs", f"{nut_avg['avg_fat_g']}g fat"]
+        if block and block["calorie_target"]:
+            diff = nut_avg["avg_calories"] - block["calorie_target"]
+            sign = "+" if diff > 0 else ""
+            nut_parts.append(f"{sign}{diff} vs target")
+        lines.append(f"**Nutrition (7-day avg):** {' | '.join(nut_parts)}")
+
     # Deload
     deload = get_active_deload_cycle()
     if deload:
@@ -727,18 +781,23 @@ def format_fitness_detail() -> str:
     lines = [format_fitness_summary(), ""]
 
     # Nutrition
-    nutrition = get_recent_nutrition(limit=3)
-    if nutrition:
-        lines.append("**Nutrition (monthly):**")
-        for n in nutrition:
-            parts = [n["month"]]
-            if n["avg_calories"]:
-                parts.append(f"{n['avg_calories']} kcal")
-            if n["avg_protein_g"]:
-                parts.append(f"{n['avg_protein_g']}g protein")
-            if n["avg_fat_g"]:
-                parts.append(f"{n['avg_fat_g']}g fat")
-            lines.append(f"  {' | '.join(parts)}")
+    nut_avg = get_nutrition_averages(days=7)
+    if nut_avg["avg_calories"]:
+        lines.append("**Nutrition (7-day avg):**")
+        parts = [f"{nut_avg['avg_calories']} kcal", f"{nut_avg['avg_protein_g']}g P",
+                 f"{nut_avg['avg_carbs_g']}g C", f"{nut_avg['avg_fat_g']}g F"]
+        block = get_current_block()
+        if block and block["calorie_target"]:
+            diff = nut_avg["avg_calories"] - block["calorie_target"]
+            sign = "+" if diff > 0 else ""
+            parts.append(f"{sign}{diff} vs {block['calorie_target']} target")
+        lines.append(f"  {' | '.join(parts)}")
+
+    daily_nut = get_daily_nutrition(limit=14)
+    if daily_nut:
+        lines.append("\n**Daily Nutrition (last 14 days):**")
+        for d in daily_nut:
+            lines.append(f"  {d['date']}: {d['calories']} kcal | {d['protein_g']}g P | {d['carbs_g']}g C | {d['fat_g']}g F")
 
     # Recent sessions with more detail
     sessions = get_recent_sessions(limit=8)

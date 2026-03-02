@@ -156,11 +156,11 @@ USE WHEN: Jason skipped gym. No judgement. Suggest ramp-back modification if app
 ```
 USE WHEN: Jason reports his weight. Compare to phase targets and weight trend. Date defaults to today.
 
-### log_nutrition — Monthly nutrition summary
+### log_nutrition — Weekly nutrition from MFP export
 ```json
-{"action": "log_nutrition", "month": "YYYY-MM", "avg_calories": 2800, "avg_protein_g": 175, "avg_carbs_g": 300, "avg_fat_g": 70, "notes": "optional"}
+{"action": "log_nutrition", "days": [{"date": "YYYY-MM-DD", "calories": 2248, "protein_g": 162, "carbs_g": 225, "fat_g": 77}, ...]}
 ```
-USE WHEN: Jason shares monthly nutrition averages (end of month MFP review). Compare to current phase targets.
+USE WHEN: Jason pastes his MyFitnessPal food diary export (typically on Sunday). Parse the TOTALS row for each day and include ALL days in the days array. The MFP format concatenates numbers without delimiters — extract carefully from context. Each day needs date, calories, protein_g, carbs_g, fat_g.
 
 ### log_sleep — Sleep hours
 ```json

@@ -171,17 +171,16 @@ class WeighIn(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
-class NutritionLog(Base):
-    __tablename__ = "nutrition_logs"
+class DailyNutrition(Base):
+    __tablename__ = "daily_nutrition"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
-    month = Column(String, nullable=False, unique=True)      # "YYYY-MM"
-    avg_calories = Column(Integer, nullable=True)
-    avg_protein_g = Column(Integer, nullable=True)
-    avg_carbs_g = Column(Integer, nullable=True)
-    avg_fat_g = Column(Integer, nullable=True)
+    date = Column(String, nullable=False, unique=True)       # "YYYY-MM-DD"
+    calories = Column(Integer, nullable=False)
+    protein_g = Column(Integer, nullable=False)
+    carbs_g = Column(Integer, nullable=False)
+    fat_g = Column(Integer, nullable=False)
     block_id = Column(UUID(as_uuid=True), ForeignKey("training_blocks.id"), nullable=True)
-    notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

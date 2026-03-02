@@ -35,7 +35,8 @@ from plato.db import (
     log_exercises_bulk,
     log_weigh_in,
     get_weight_trend,
-    log_monthly_nutrition,
+    log_nutrition_batch,
+    get_nutrition_averages,
     log_sleep,
     get_sleep_average,
     create_modification,
@@ -336,26 +337,32 @@ def process_action(action: dict) -> str:
                 return " | ".join(parts)
 
             case "log_nutrition":
-                month = action["month"]
-                log_monthly_nutrition(
-                    month,
-                    avg_calories=action.get("avg_calories"),
-                    avg_protein_g=action.get("avg_protein_g"),
-                    avg_carbs_g=action.get("avg_carbs_g"),
-                    avg_fat_g=action.get("avg_fat_g"),
-                    notes=action.get("notes"),
-                )
+                days = action.get("days", [])
+                if not days:
+                    return "No daily entries provided. Paste the weekly MFP export."
+
+                count = log_nutrition_batch(days)
+
+                # Build weekly summary from the batch
+                avg_cals = round(sum(d["calories"] for d in days) / len(days))
+                avg_protein = round(sum(d["protein_g"] for d in days) / len(days))
+                avg_carbs = round(sum(d["carbs_g"] for d in days) / len(days))
+                avg_fat = round(sum(d["fat_g"] for d in days) / len(days))
+                dates = [d["date"] for d in days]
+
                 block = get_current_block()
-                parts = [f"Nutrition logged for {month}"]
-                if action.get("avg_calories"):
-                    parts.append(f"{action['avg_calories']} kcal")
-                if action.get("avg_protein_g"):
-                    parts.append(f"{action['avg_protein_g']}g protein")
+                parts = [
+                    f"Nutrition logged: {count} days ({dates[0]} to {dates[-1]})",
+                    f"Avg: {avg_cals} kcal | {avg_protein}g P | {avg_carbs}g C | {avg_fat}g F",
+                ]
                 if block and block["calorie_target"]:
-                    diff = (action.get("avg_calories") or 0) - block["calorie_target"]
-                    if diff != 0:
-                        sign = "+" if diff > 0 else ""
-                        parts.append(f"{sign}{diff} vs target {block['calorie_target']}")
+                    cal_diff = avg_cals - block["calorie_target"]
+                    sign = "+" if cal_diff > 0 else ""
+                    parts.append(f"{sign}{cal_diff} vs target {block['calorie_target']}")
+                if block and block["protein_target"]:
+                    p_diff = avg_protein - block["protein_target"]
+                    sign = "+" if p_diff > 0 else ""
+                    parts.append(f"protein: {sign}{p_diff} vs {block['protein_target']}g target")
                 return " | ".join(parts)
 
             case "log_sleep":
