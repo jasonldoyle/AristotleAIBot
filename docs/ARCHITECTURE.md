@@ -42,7 +42,7 @@ plato_bot.py
 ## Key Components
 
 ### handlers.py
-- `handle_message()` — Main handler: auth check, save message, build prompt, call Claude, parse JSON action block, route to actions, reply
+- `handle_message()` — Main handler: auth check, save message, build prompt, call Claude, parse JSON action block, route to actions, reply. Splits long replies on paragraph boundaries for Telegram's 4096-char limit.
 - `start()`, `status()`, `clear_history()` — Telegram command handlers
 - Max tokens: 4096
 
@@ -50,7 +50,7 @@ plato_bot.py
 - `build_system_prompt()` — Assembles base prompt + action schemas
 - `build_messages_with_history()` — Last 10 conversation turns for Claude context
 - `get_base_prompt()` — Personality, soul doc injection, active projects, today's schedule, fitness status
-- Action schemas define all 29 actions with parameters, categories, and trigger conditions
+- Action schemas define all 30 actions with parameters, categories, and trigger conditions
 
 ### actions.py
 - `process_action(action_data, raw_message)` — Match statement dispatching to per-action handlers
@@ -69,10 +69,10 @@ plato_bot.py
 - `ideas.py` — Idea parking lot
 - `projects.py` — Projects, goals, work logs
 - `schedule.py` — Schedule events, pending plans, deviations
-- `fitness.py` — Training sessions, exercises, weight, nutrition, sleep, modifications, phase timeline
+- `fitness.py` — Training sessions, exercises, weight, nutrition, sleep, modifications, phase timeline, progression engine (seed, prescribe, advance, sync, auto-complete)
 
 ### models.py
-SQLAlchemy models for all 17 tables: `Conversation`, `SoulDoc`, `Idea`, `Project`, `ProjectGoal`, `ProjectLog`, `ScheduleEvent`, `PendingPlan`, `TrainingBlock`, `WorkoutSession`, `ExerciseLog`, `WorkoutModification`, `WeighIn`, `NutritionLog`, `SleepLog`, `DeloadTracker`
+SQLAlchemy models for all 18 tables: `Conversation`, `SoulDoc`, `Idea`, `Project`, `ProjectGoal`, `ProjectLog`, `ScheduleEvent`, `PendingPlan`, `TrainingBlock`, `WorkoutSession`, `ExerciseLog`, `WorkoutModification`, `WeighIn`, `DailyNutrition`, `SleepLog`, `DeloadTracker`, `ExerciseProgression`
 
 ## Design Decisions
 

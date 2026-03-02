@@ -1,6 +1,6 @@
 # Actions Reference
 
-All 29 actions Plato currently supports, grouped by domain.
+All 30 actions Plato currently supports, grouped by domain.
 
 ## Soul Doc & Ideas (7 actions)
 
@@ -83,7 +83,7 @@ Categories: `goal_lifetime`, `goal_5yr`, `goal_2yr`, `goal_1yr`, `philosophy`, `
 ```json
 {"action": "plan_week", "week": "this|next", "events": [{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "<title>", "description": "<optional>", "category": "<project-slug>|rest|exercise|personal|citco|audrey"}]}
 ```
-Creates a pending plan shown as a preview. Must be approved before pushing to Google Calendar.
+Creates a pending plan shown as a preview. Auto-completes unlogged gym sessions from the current week (silence = compliance) and shows workout prescriptions with exact weight x reps. Must be approved before pushing to Google Calendar.
 
 ### `approve_plan` — Approve a pending plan
 ```json
@@ -118,13 +118,13 @@ Cancels all Plato events from 18:00 onwards and creates an "Audrey Time" event.
 ```
 Only include fields that are changing.
 
-## Fitness (8 actions)
+## Fitness (9 actions)
 
 ### `log_workout` — Log exercise numbers or session variations
 ```json
-{"action": "log_workout", "day_label": "day1_chest|day2_back|day3_legs|day4_shoulders", "date": "YYYY-MM-DD", "status": "completed|partial|deload", "feedback": "<optional>", "lifts": [{"exercise": "<slug>", "sets": 4, "reps": 8, "weight_kg": 80.0, "rpe": 8}]}
+{"action": "log_workout", "day_label": "day1_chest|day2_back|day3_legs|day4_shoulders", "date": "YYYY-MM-DD", "status": "completed|partial|deload", "feedback": "<optional>", "lifts": [{"exercise": "incline_bb_press", "sets": 4, "reps": 8, "weight_kg": 80.0, "rpe": 8}]}
 ```
-Only use when there's something worth recording — silence means compliance.
+Only use when there's something worth recording — silence means compliance. Exercise slugs must match TRAINING_SPLIT exactly. Reported numbers sync the automatic progression tracker.
 
 ### `missed_workout` — Log a missed session
 ```json
@@ -137,10 +137,11 @@ Only use when there's something worth recording — silence means compliance.
 ```
 Returns trend (4-week avg, rate/week) and current phase context.
 
-### `log_nutrition` — Monthly nutrition summary
+### `log_nutrition` — Daily nutrition from MFP export
 ```json
-{"action": "log_nutrition", "month": "YYYY-MM", "avg_calories": 2850, "avg_protein_g": 172, "avg_carbs_g": 300, "avg_fat_g": 70, "notes": "<optional>"}
+{"action": "log_nutrition", "days": [{"date": "YYYY-MM-DD", "calories": 2850, "protein_g": 172, "carbs_g": 300, "fat_g": 70}, ...]}
 ```
+Parse TOTALS row for each day from MyFitnessPal food diary export.
 
 ### `log_sleep` — Daily sleep hours
 ```json
@@ -160,11 +161,17 @@ Flags if 7-day average drops below 7 hours.
 ```
 Rarely needed — phases auto-apply by date.
 
+### `seed_progression` — Initialize exercise starting weights
+```json
+{"action": "seed_progression", "exercises": [{"exercise": "incline_bb_press", "weight_kg": 60}, {"exercise": "incline_db_press", "weight_kg": 22}]}
+```
+One-time setup per exercise for the progression engine. Each starts at bottom of its rep range. Optionally include `"starting_reps"` to override.
+
 ### `query_fitness` — Get fitness status
 ```json
 {"action": "query_fitness"}
 ```
-Returns phase, today's workout, weight trend, sleep avg, active mods, recent sessions.
+Returns phase, today's workout with prescribed weight x reps, weight trend, sleep avg, active mods, recent sessions.
 
 ## Action Rules
 

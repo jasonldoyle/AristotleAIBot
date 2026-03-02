@@ -5,10 +5,11 @@ Plato generates complete weekly calendars that respect Jason's fixed commitments
 ## How It Works
 
 1. User says "plan this week" or "plan next week"
-2. Claude receives a template of the week's time blocks (fixed + free)
-3. Claude fills free blocks with project work, rest, and personal time based on active projects and soul doc goals
-4. The full plan is presented in Telegram for review
-5. User replies "approve" to push all events to Google Calendar
+2. Any unlogged gym sessions from the current week are auto-completed (silence = compliance) and exercise progressions advance
+3. Claude receives a template of the week's time blocks (fixed + free)
+4. Claude fills free blocks with project work, rest, and personal time based on active projects and soul doc goals
+5. The full plan is presented in Telegram with workout prescriptions (exact weight x reps for each gym day)
+6. User replies "approve" to push all events to Google Calendar
 
 ## Work Pattern
 

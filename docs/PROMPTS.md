@@ -22,7 +22,7 @@ Prompt Assembly:
   - Scheduling rules and instructions
   - Fitness status (phase, today's workout, weight trend, sleep, mods)
   - Fitness program rules (progression, deload, stall diagnosis, phase rules)
-  - All 29 action schemas with trigger conditions
+  - All 30 action schemas with trigger conditions
     |
     v
 build_messages_with_history()
@@ -40,11 +40,11 @@ Claude Sonnet API call
 - Soul doc entries grouped by tier (lifetime → 5yr → 2yr → 1yr → philosophy → rules)
 - Active projects with slugs and current goals
 - Today's date and schedule
-- Fitness status: current phase + targets, today's workout with last weights and active mods, weight trend, sleep avg, deload cycle, recent sessions
-- Fitness program rules: progression protocol, deload rules, stall diagnosis, phase-specific rules, fallback tiers
+- Fitness status: current phase + targets, today's workout with prescribed weight x reps from progression engine and active mods, weight trend, sleep avg, deload cycle, recent sessions
+- Fitness program rules: automatic progression protocol, deload rules, stall diagnosis, phase-specific rules, fallback tiers
 
 ### Action Schemas (`prompts/__init__.py`)
-- All 29 actions with JSON format, parameters, and `USE WHEN` trigger conditions
+- All 30 actions with JSON format, parameters, and `USE WHEN` trigger conditions
 - Critical rules: one action per message, JSON at start of reply, no fake actions in plain text
 
 ### Schedule Prompt (`calendar.py`)
@@ -64,4 +64,4 @@ plato/prompts/
 
 ## Future Consideration
 
-Intent-based routing (detecting domains from the message and only including relevant schemas) was considered but not implemented. The current monolithic approach works well for 29 actions. May revisit in Phase 8 (Polish) if token usage becomes an issue.
+Intent-based routing (detecting domains from the message and only including relevant schemas) was considered but not implemented. The current monolithic approach works well for 30 actions. May revisit in Phase 8 (Polish) if token usage becomes an issue.

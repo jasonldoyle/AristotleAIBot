@@ -210,65 +210,74 @@ Key difference from v1: Context is **summarized before injection**, not dumped r
 ---
 
 ## Phase 4: Fitness ✅
-**Goal:** Training tracking with exception-based logging, progressive overload, weekly weight, monthly nutrition, sleep, and periodised bulk/cut management.
+**Goal:** Training tracking with exception-based logging, automatic progression engine, weekly weight, daily nutrition (MFP), sleep, and periodised bulk/cut management.
 
 ### Design Principles:
 - **Assume compliance** — gym sessions default to "done as planned." Only log variations, specific numbers, or missed sessions
-- **All exercises tracked equally** — each progresses at its own pace, no special compound treatment
+- **Prescriptive programming** — the system tells Jason what weight x reps to hit each session, auto-advances progression on silence
+- **All exercises tracked equally** — each progresses at its own pace within its own rep range, no special compound treatment
 - **Phases auto-applied** — bulk/cut timeline hardcoded from the 2-year plan, auto-derived from current date
 - **Structured modifications** — persistent workout adjustments stored in DB, applied on top of baseline template
-- **Monthly nutrition** — end-of-month averages, not daily tracking
+- **Daily nutrition** — daily MFP entries parsed from food diary export (typically pasted on Sundays)
 
-### Models (8 tables, migration 005):
-- `training_blocks` — name, phase (bulk/mini_cut/final_cut/maintenance), start/end dates, calorie/protein/fat targets, is_override, status
-- `workout_sessions` — date, day_label, status (completed/partial/missed/deload), block_id, feedback, deviation_notes
-- `exercise_logs` — session_id, exercise slug, sets, reps, weight_kg, rpe, notes
-- `workout_modifications` — exercise, modification_type, detail, reason, valid_from/until, status (auto-expires)
-- `weigh_ins` — date, weight_kg, block_id, notes (weekly Sunday mornings)
-- `nutrition_logs` — month (unique), avg calories/protein/carbs/fat, block_id (monthly summary)
-- `sleep_logs` — date (unique), hours, notes
-- `deload_tracker` — cycle_start_date, weeks_completed, deload_done, status (8-week cycles)
+### Models:
+- `training_blocks` — name, phase (bulk/mini_cut/final_cut/maintenance), start/end dates, calorie/protein/fat targets, is_override, status (migration 005)
+- `workout_sessions` — date, day_label, status (completed/partial/missed/deload/auto_completed), block_id, feedback, deviation_notes (migration 005)
+- `exercise_logs` — session_id, exercise slug, sets, reps, weight_kg, rpe, notes (migration 005)
+- `workout_modifications` — exercise, modification_type, detail, reason, valid_from/until, status (auto-expires) (migration 005)
+- `weigh_ins` — date, weight_kg, block_id, notes (weekly Sunday mornings) (migration 005)
+- `daily_nutrition` — date (unique), calories, protein_g, carbs_g, fat_g, block_id (migration 006, replaces monthly nutrition_logs)
+- `sleep_logs` — date (unique), hours, notes (migration 005)
+- `deload_tracker` — cycle_start_date, weeks_completed, deload_done, status (8-week cycles) (migration 005)
+- `exercise_progression` — exercise (unique slug), weight_kg, current_reps, sessions_at_current (migration 007)
 
 ### Files created/modified:
-- `plato/db/fitness.py` — **Created.** All fitness CRUD, PHASE_TIMELINE (10 phases Mar 2026 – Jun 2028), TRAINING_SPLIT (4-day split with 33 exercises), DAY_WEEKDAY_MAP, modification logic, weight trend calculation, formatting for prompt injection and query responses, static fitness rules
-- `plato/models.py` — **Edited.** Added 8 model classes (TrainingBlock, WorkoutSession, ExerciseLog, WorkoutModification, WeighIn, NutritionLog, SleepLog, DeloadTracker)
-- `alembic/versions/005_add_fitness.py` — **Created.** Migration for 8 tables
+- `plato/db/fitness.py` — **Created.** All fitness CRUD, PHASE_TIMELINE (10 phases Mar 2026 – Jun 2028), TRAINING_SPLIT (4-day split with 33 exercises), DAY_WEEKDAY_MAP, progression engine (seed, prescribe, advance, sync, auto-complete), modification logic, weight trend calculation, formatting for prompt injection and query responses, static fitness rules
+- `plato/models.py` — **Edited.** Added 9 model classes (TrainingBlock, WorkoutSession, ExerciseLog, WorkoutModification, WeighIn, DailyNutrition, SleepLog, DeloadTracker, ExerciseProgression)
+- `alembic/versions/005_add_fitness.py` — **Created.** Migration for core fitness tables
+- `alembic/versions/006_daily_nutrition.py` — **Created.** Migration: monthly nutrition refactored to daily MFP entries
+- `alembic/versions/007_exercise_progression.py` — **Created.** Migration for exercise_progression table
 - `plato/db/__init__.py` — **Edited.** Added fitness imports/exports
-- `plato/actions.py` — **Edited.** Added 8 action cases
-- `plato/prompts/__init__.py` — **Edited.** Extended ACTION_SCHEMA with 8 fitness action definitions
+- `plato/actions.py` — **Edited.** Added 9 action cases, plan_week updated with auto-complete + prescriptions
+- `plato/prompts/__init__.py` — **Edited.** Extended ACTION_SCHEMA with 9 fitness action definitions
 - `plato/prompts/base.py` — **Edited.** Added Fitness Status section + fitness program rules to system prompt
+- `plato/handlers.py` — **Edited.** Added Telegram message splitting for replies exceeding 4096 chars
 
 ### Hardcoded constants:
 - **PHASE_TIMELINE** — 10 phases: Bulk 1-5, Mini-Cut 1-4, Final Cut. Auto-derived from current date.
 - **TRAINING_SPLIT** — 4-day split: Mon (Chest+Delts), Tue (Back+Biceps+Yoke), Fri (Legs+Abs), Sat (Shoulders+Arms)
 - **DAY_WEEKDAY_MAP** — {Mon: day1_chest, Tue: day2_back, Fri: day3_legs, Sat: day4_shoulders}
 
-### Actions (8 new, 29 total):
-- `log_workout` — Log exercise numbers or session variations. Only when deviations/specific numbers reported.
+### Actions (9 new, 30 total):
+- `log_workout` — Log exercise numbers or session variations. Syncs progression tracker, advances progression.
 - `missed_workout` — Log missed session with reason. Suggest ramp-back modification.
 - `log_weight` — Weekly weigh-in. Returns trend vs phase targets.
-- `log_nutrition` — Monthly nutrition summary. Compare to current phase targets.
+- `log_nutrition` — Daily nutrition from MFP export. Parse TOTALS row per day.
 - `log_sleep` — Sleep hours. Flags if 7-day avg < 7h.
 - `modify_workout` — Adjust workout template (reduce/increase volume, swap, adjust weight, skip). Time-bounded.
 - `override_block` — Deviate from hardcoded phase timeline. Rarely needed.
-- `query_fitness` — Detailed fitness status: phase, today's workout with last weights, weight trend, sleep avg, nutrition, mods.
+- `seed_progression` — Initialize exercise starting weights for progression engine. One-time setup per exercise.
+- `query_fitness` — Detailed fitness status: phase, today's workout with prescribed weight x reps, weight trend, sleep avg, nutrition, mods.
+
+### Progression engine:
+- **Seeding** — `seed_progression` initializes starting weights. Each exercise starts at bottom of its own rep range.
+- **Prescribing** — `get_day_prescription()` returns exact weight x reps for every exercise from `exercise_progression` table.
+- **Advancing** — Every 2 completed sessions at same reps: +1 rep. Top of range: +2.5kg, reset to bottom.
+- **Auto-completing** — `plan_week` auto-completes unlogged past sessions at prescribed numbers, advances progressions.
+- **Overriding** — When Jason reports different numbers via `log_workout`, progression syncs to match reality.
+- **Excluding** — Exercises with "max" or time-based reps (ab_wheel, farmers_carry) excluded from auto-progression.
 
 ### Prompt injection:
-- **Fitness Status** section in system prompt: current phase + targets, today's workout (with last-known weights and active mods per exercise), weight trend, sleep average, deload cycle, recent sessions
-- **Fitness Program Rules** section: progression protocol, deload rules, stall diagnosis priority, bulk/cut/final-cut rules, fallback tiers, exception-based logging reminder
+- **Fitness Status** section in system prompt: current phase + targets, today's workout (with prescribed weight x reps from progression engine and active mods per exercise), weight trend, sleep average, deload cycle, recent sessions
+- **Fitness Program Rules** section: automatic progression rules, deload rules, stall diagnosis priority, bulk/cut/final-cut rules, fallback tiers, exception-based logging reminder
 
 ### Verified via Telegram:
-- `query_fitness` — "How's my fitness?" → returns current phase (Bulk 1, auto-derived), today's workout, weight trend, sleep average
+- `query_fitness` — "How's my fitness?" → returns current phase (Bulk 1, auto-derived), today's workout with prescribed numbers, weight trend, sleep average
 - `log_weight` — "82.3 this morning" → weight logged, trend calculated, phase targets shown
 - `log_sleep` — "Got 6 hours last night" → sleep logged, 7-day average returned, below-7h warning triggered
-
-### Remaining tests (not yet verified via Telegram):
-- `log_workout` — "Hit 80kg on incline 4x8" → log specific exercise numbers (test on a training day)
-- `missed_workout` — "Skipped gym, knee acting up" → missed session + ramp-back suggestion
-- `modify_workout` — "Reduce bench volume next week" / "Swap RDL for good mornings permanently"
-- `log_nutrition` — "March nutrition: 2850 cal, 172g protein" → monthly summary
-- `override_block` — "Start the mini-cut early" → deviate from hardcoded phase timeline
-- *[says nothing about gym on a gym day]* → no action, assumed completed (exception-based logging)
+- `seed_progression` — Starting weights for chest day → all 7 exercises seeded at correct bottom-of-range reps
+- `plan_week` — Plan shows workout prescriptions for all 4 days, auto-completes unlogged sessions
+- Message splitting — Long plan + prescriptions response correctly split across multiple Telegram messages
 
 ---
 
