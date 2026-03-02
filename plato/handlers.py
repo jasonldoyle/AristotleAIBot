@@ -58,7 +58,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Save assistant response to history
     save_conversation("assistant", reply)
 
-    await update.message.reply_text(reply)
+    # Telegram has a 4096 char limit — split long messages
+    if len(reply) <= 4096:
+        await update.message.reply_text(reply)
+    else:
+        # Split on double newlines to keep logical chunks together
+        chunks = []
+        current = ""
+        for paragraph in reply.split("\n\n"):
+            if len(current) + len(paragraph) + 2 > 4000:
+                if current:
+                    chunks.append(current.strip())
+                current = paragraph
+            else:
+                current = current + "\n\n" + paragraph if current else paragraph
+        if current:
+            chunks.append(current.strip())
+
+        for chunk in chunks:
+            # Final safety split if a single paragraph is > 4096
+            while len(chunk) > 4096:
+                await update.message.reply_text(chunk[:4096])
+                chunk = chunk[4096:]
+            if chunk:
+                await update.message.reply_text(chunk)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -1,12 +1,12 @@
 """Fitness domain: training blocks, workout sessions, exercise logs,
 modifications, weigh-ins, nutrition, sleep, deload tracking."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from plato.config import SessionLocal
 from plato.models import (
     TrainingBlock, WorkoutSession, ExerciseLog, WorkoutModification,
-    WeighIn, DailyNutrition, SleepLog, DeloadTracker,
+    WeighIn, DailyNutrition, SleepLog, DeloadTracker, ExerciseProgression,
 )
 
 
@@ -657,6 +657,329 @@ def complete_deload() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Exercise Progression Engine
+# ---------------------------------------------------------------------------
+
+# Exercises excluded from auto-progression (max reps or time-based)
+_EXCLUDED_FROM_PROGRESSION = {"ab_wheel", "farmers_carry"}
+
+
+def _parse_rep_range(rep_str: str) -> tuple[int, int] | None:
+    """Parse a rep range string like '6-8' into (6, 8).
+    Returns None for excluded patterns like 'max' or '30-40s'."""
+    if not rep_str or rep_str == "max":
+        return None
+    if rep_str.endswith("s"):  # time-based like "30-40s"
+        return None
+    parts = rep_str.split("-")
+    if len(parts) == 2:
+        try:
+            return (int(parts[0]), int(parts[1]))
+        except ValueError:
+            return None
+    # Single number like "10"
+    try:
+        n = int(rep_str)
+        return (n, n)
+    except ValueError:
+        return None
+
+
+def _get_exercise_info(exercise_slug: str) -> dict | None:
+    """Look up exercise info (display name, sets, rep range) from TRAINING_SPLIT."""
+    for day_key, day_data in TRAINING_SPLIT.items():
+        for ex in day_data["exercises"]:
+            if ex["name"] == exercise_slug:
+                return ex
+    return None
+
+
+def seed_progression(exercise: str, weight_kg: float, starting_reps: int = None) -> dict:
+    """Create or update an exercise_progression entry.
+    If starting_reps is None, defaults to bottom of the exercise's rep range."""
+    ex_info = _get_exercise_info(exercise)
+    rep_range = _parse_rep_range(ex_info["reps"]) if ex_info else None
+
+    if starting_reps is None and rep_range:
+        starting_reps = rep_range[0]  # bottom of range
+    elif starting_reps is None:
+        starting_reps = 8  # safe fallback
+
+    with SessionLocal() as session:
+        existing = session.query(ExerciseProgression).filter_by(exercise=exercise).first()
+        if existing:
+            existing.weight_kg = weight_kg
+            existing.current_reps = starting_reps
+            existing.sessions_at_current = 0
+            existing.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            return {
+                "exercise": exercise,
+                "weight_kg": weight_kg,
+                "current_reps": starting_reps,
+                "sessions_at_current": 0,
+                "status": "updated",
+            }
+
+        ep = ExerciseProgression(
+            exercise=exercise,
+            weight_kg=weight_kg,
+            current_reps=starting_reps,
+            sessions_at_current=0,
+        )
+        session.add(ep)
+        session.commit()
+        return {
+            "exercise": exercise,
+            "weight_kg": weight_kg,
+            "current_reps": starting_reps,
+            "sessions_at_current": 0,
+            "status": "created",
+        }
+
+
+def get_exercise_prescription(exercise: str) -> dict | None:
+    """Get the current prescription for an exercise.
+    Falls back to last logged weight if no progression entry exists.
+    Returns None if no data at all (needs seeding)."""
+    ex_info = _get_exercise_info(exercise)
+    if not ex_info:
+        return None
+
+    rep_range = _parse_rep_range(ex_info["reps"])
+
+    # Skip excluded exercises
+    if exercise in _EXCLUDED_FROM_PROGRESSION or rep_range is None:
+        return {
+            "exercise": exercise,
+            "display": ex_info["display"],
+            "sets": ex_info["sets"],
+            "reps": ex_info["reps"],
+            "excluded": True,
+        }
+
+    # Check progression table first
+    with SessionLocal() as session:
+        ep = session.query(ExerciseProgression).filter_by(exercise=exercise).first()
+        if ep:
+            return {
+                "exercise": exercise,
+                "display": ex_info["display"],
+                "weight_kg": ep.weight_kg,
+                "sets": ex_info["sets"],
+                "reps": ep.current_reps,
+                "rep_range": f"{rep_range[0]}-{rep_range[1]}",
+                "sessions_at_current": ep.sessions_at_current,
+                "excluded": False,
+            }
+
+    # Fallback: bootstrap from last logged exercise data
+    last = get_last_weight_for_exercise(exercise)
+    if last:
+        # Auto-seed from historical data at bottom of rep range
+        seed_progression(exercise, last["weight_kg"])
+        return {
+            "exercise": exercise,
+            "display": ex_info["display"],
+            "weight_kg": last["weight_kg"],
+            "sets": ex_info["sets"],
+            "reps": rep_range[0],
+            "rep_range": f"{rep_range[0]}-{rep_range[1]}",
+            "sessions_at_current": 0,
+            "excluded": False,
+            "bootstrapped": True,
+        }
+
+    # No data at all — needs manual seeding
+    return {
+        "exercise": exercise,
+        "display": ex_info["display"],
+        "sets": ex_info["sets"],
+        "rep_range": f"{rep_range[0]}-{rep_range[1]}",
+        "needs_seed": True,
+        "excluded": False,
+    }
+
+
+def get_day_prescription(day_label: str) -> list[dict]:
+    """Get prescriptions for all exercises in a day."""
+    if day_label not in TRAINING_SPLIT:
+        return []
+
+    day = TRAINING_SPLIT[day_label]
+    prescriptions = []
+    for ex in day["exercises"]:
+        p = get_exercise_prescription(ex["name"])
+        if p:
+            prescriptions.append(p)
+    return prescriptions
+
+
+def advance_progression(exercise: str) -> dict | None:
+    """Advance progression for an exercise after a completed session.
+    Increments sessions_at_current. Every 2 sessions: +1 rep.
+    At top of rep range: +2.5kg and reset to bottom."""
+    ex_info = _get_exercise_info(exercise)
+    if not ex_info or exercise in _EXCLUDED_FROM_PROGRESSION:
+        return None
+
+    rep_range = _parse_rep_range(ex_info["reps"])
+    if not rep_range:
+        return None
+
+    with SessionLocal() as session:
+        ep = session.query(ExerciseProgression).filter_by(exercise=exercise).first()
+        if not ep:
+            return None
+
+        ep.sessions_at_current += 1
+        bumped = None
+
+        if ep.sessions_at_current >= 2:
+            ep.sessions_at_current = 0
+            ep.current_reps += 1
+
+            if ep.current_reps > rep_range[1]:
+                # Hit top of range — add weight, reset reps
+                ep.weight_kg += 2.5
+                ep.current_reps = rep_range[0]
+                bumped = "weight"
+            else:
+                bumped = "reps"
+
+        ep.updated_at = datetime.now(timezone.utc)
+        session.commit()
+
+        return {
+            "exercise": exercise,
+            "weight_kg": ep.weight_kg,
+            "current_reps": ep.current_reps,
+            "sessions_at_current": ep.sessions_at_current,
+            "bumped": bumped,  # None, "reps", or "weight"
+        }
+
+
+def sync_progression_from_actual(exercise: str, actual_weight_kg: float,
+                                  actual_reps: int) -> dict | None:
+    """Update progression to match actual reported numbers (user override).
+    Called when Jason reports numbers that differ from prescribed."""
+    ex_info = _get_exercise_info(exercise)
+    if not ex_info or exercise in _EXCLUDED_FROM_PROGRESSION:
+        return None
+
+    rep_range = _parse_rep_range(ex_info["reps"])
+    if not rep_range:
+        return None
+
+    with SessionLocal() as session:
+        ep = session.query(ExerciseProgression).filter_by(exercise=exercise).first()
+        if not ep:
+            # Create a new entry from actual data
+            return seed_progression(exercise, actual_weight_kg, actual_reps)
+
+        # Only update if different from current prescription
+        changed = False
+        if ep.weight_kg != actual_weight_kg:
+            ep.weight_kg = actual_weight_kg
+            changed = True
+        if ep.current_reps != actual_reps:
+            ep.current_reps = actual_reps
+            changed = True
+
+        if changed:
+            ep.sessions_at_current = 0  # reset counter on override
+            ep.updated_at = datetime.now(timezone.utc)
+            session.commit()
+
+        return {
+            "exercise": exercise,
+            "weight_kg": ep.weight_kg,
+            "current_reps": ep.current_reps,
+            "sessions_at_current": ep.sessions_at_current,
+            "synced": changed,
+        }
+
+
+def auto_complete_week(week_start: str) -> list[dict]:
+    """Auto-complete unlogged gym sessions from a week.
+    For each gym day: if no session exists, create one at prescribed numbers
+    and advance progression. Returns summary of what was auto-completed."""
+    monday = datetime.strptime(week_start, "%Y-%m-%d")
+    today = datetime.now()
+    results = []
+
+    for weekday_offset, day_label in DAY_WEEKDAY_MAP.items():
+        session_date = monday + timedelta(days=weekday_offset)
+
+        # Don't auto-complete future dates or today
+        if session_date.date() >= today.date():
+            continue
+
+        date_str = session_date.strftime("%Y-%m-%d")
+
+        # Check if a session already exists for this date
+        existing = get_session_for_date(date_str)
+        if existing:
+            results.append({
+                "date": date_str,
+                "day_label": day_label,
+                "status": "already_logged",
+                "original_status": existing["status"],
+            })
+            continue
+
+        # No session — auto-complete at prescribed numbers
+        block = get_current_block()
+        block_id = block["id"] if block else None
+
+        # Create session
+        with SessionLocal() as db_session:
+            ws = WorkoutSession(
+                date=date_str, day_label=day_label,
+                status="auto_completed", block_id=block_id,
+                feedback="Auto-completed (silence = compliance)",
+            )
+            db_session.add(ws)
+            db_session.commit()
+            session_id = str(ws.id)
+
+        # Log exercises at prescribed numbers and advance progression
+        day_exercises = TRAINING_SPLIT.get(day_label, {}).get("exercises", [])
+        exercises_advanced = []
+
+        for ex in day_exercises:
+            if ex["name"] in _EXCLUDED_FROM_PROGRESSION:
+                continue
+
+            prescription = get_exercise_prescription(ex["name"])
+            if not prescription or prescription.get("needs_seed") or prescription.get("excluded"):
+                continue
+
+            # Log at prescribed numbers
+            log_exercise(
+                session_id=session_id,
+                exercise=ex["name"],
+                sets=prescription["sets"],
+                reps=prescription["reps"],
+                weight_kg=prescription["weight_kg"],
+            )
+
+            # Advance progression
+            result = advance_progression(ex["name"])
+            if result:
+                exercises_advanced.append(result)
+
+        results.append({
+            "date": date_str,
+            "day_label": day_label,
+            "status": "auto_completed",
+            "exercises_advanced": len(exercises_advanced),
+        })
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Formatting (for prompt injection and query responses)
 # ---------------------------------------------------------------------------
 
@@ -692,16 +1015,20 @@ def format_fitness_summary() -> str:
     if day_label and day_label in TRAINING_SPLIT:
         day = TRAINING_SPLIT[day_label]
         lines.append(f"**Today:** {day['label']} ({day['weekday']})")
-        # Show each exercise with last-known weight
+        # Show each exercise with prescribed weight/reps from progression engine
         mods = get_active_modifications()
         mod_map = {m["exercise"]: m for m in mods}
-        for ex in day["exercises"]:
-            last = get_last_weight_for_exercise(ex["name"])
-            weight_str = f"{last['weight_kg']}kg ({last['sets']}x{last['reps']})" if last else "no data"
+        prescriptions = get_day_prescription(day_label)
+        for p in prescriptions:
             mod_note = ""
-            if ex["name"] in mod_map:
-                mod_note = f" [MOD: {mod_map[ex['name']]['detail']}]"
-            lines.append(f"  {ex['display']}: {weight_str} — target {ex['reps']}{mod_note}")
+            if p["exercise"] in mod_map:
+                mod_note = f" [MOD: {mod_map[p['exercise']]['detail']}]"
+            if p.get("excluded"):
+                lines.append(f"  {p['display']}: {p['sets']}×{p['reps']}{mod_note}")
+            elif p.get("needs_seed"):
+                lines.append(f"  {p['display']}: ⚠ needs seeding ({p['rep_range']}){mod_note}")
+            else:
+                lines.append(f"  {p['display']}: → {p['weight_kg']}kg × {p['sets']}×{p['reps']} ({p['rep_range']}){mod_note}")
     else:
         # Rest day — find next session
         today_wd = datetime.now().weekday()
@@ -824,8 +1151,12 @@ def get_fitness_prompt() -> str:
 Training split: Mon (Chest+Delts), Tue (Back+Biceps+Yoke), Fri (Legs+Abs), Sat (Shoulders+Arms)
 Pre-workout: Thoracic foam roll 60s, band pull-aparts 2x15, wall slides 2x10
 
-Progression: When Jason hits the top of the rep range for all sets, suggest adding weight next session.
-  Barbell exercises: +2.5kg. Dumbbells: next available increment. Cables: +1 plate.
+### Automatic Progression
+Progression is automatic — the system prescribes exact weight × reps for each exercise.
+  Rule: Every 2 completed sessions at the same reps → +1 rep. When reps exceed the top of the exercise's range → +2.5kg and reset to bottom of range.
+  Silence = completed as prescribed. Progression advances automatically when plan_week runs.
+  If Jason reports different numbers than prescribed, the system updates progression to match his reality.
+  Exercises with "max" reps or time-based (ab_wheel, farmers_carry) are excluded from auto-progression.
 Deload: Every 8 weeks, drop all weights 10%, focus on form. Non-negotiable.
 Stalled lift: Check sleep first (7-day avg < 7h?), then nutrition compliance, then recovery. Change program last.
 

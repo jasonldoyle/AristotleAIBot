@@ -100,7 +100,7 @@ USE WHEN: Jason asks about progress on a specific project.
 ```json
 {"action": "plan_week", "week": "this|next", "events": [{"date": "YYYY-MM-DD", "start": "HH:MM", "end": "HH:MM", "title": "Short title", "description": "optional detail", "category": "cfa|nitrogen|glowbook|plato|leetcode|rest|exercise|personal|citco|audrey"}, ...]}
 ```
-USE WHEN: Jason asks to plan/schedule his week. Use "week": "this" for the current week, "week": "next" for next week. Default to "this" unless Jason explicitly says "next week". Generate a full week of events respecting the weekly template. Rules: no overlap with work/fixed blocks, CFA minimum 10h, side projects 8-10h, batch similar work, rest minimums, Sunday evening light. Include ALL blocks — study, projects, rest, exercise.
+USE WHEN: Jason asks to plan/schedule his week. Use "week": "this" for the current week, "week": "next" for next week. Default to "this" unless Jason explicitly says "next week". Generate a full week of events respecting the weekly template. Rules: no overlap with work/fixed blocks, CFA minimum 10h, side projects 8-10h, batch similar work, rest minimums, Sunday evening light. Include ALL blocks — study, projects, rest, exercise. This also auto-completes any unlogged gym sessions from the current week (silence = compliance) and shows workout prescriptions with exact weight × reps for next week.
 
 ### approve_plan — Approve a pending weekly plan
 ```json
@@ -142,7 +142,7 @@ USE WHEN: Jason wants to move, reschedule, or rename an event. Only include the 
 ```json
 {"action": "log_workout", "day_label": "day1_chest|day2_back|day3_legs|day4_shoulders", "date": "YYYY-MM-DD", "status": "completed|partial|deload", "feedback": "optional", "lifts": [{"exercise": "incline_bb_press", "sets": 4, "reps": 8, "weight_kg": 80.0, "rpe": 8}]}
 ```
-USE WHEN: Jason mentions specific exercise numbers, partial completion, deviations, or feedback. Do NOT use when the session went as planned — silence means compliance. Only log when there's something worth recording: specific weights, an exercise that went differently, or notable feedback. Date defaults to today.
+USE WHEN: Jason mentions specific exercise numbers, partial completion, deviations, or feedback. Do NOT use when the session went as planned — silence means compliance. Only log when there's something worth recording: specific weights, an exercise that went differently, or notable feedback. Date defaults to today. The "exercise" field in lifts MUST use exact slugs from the training split (e.g. incline_bb_press, lateral_raise_db — see seed_progression for the full list). Reported numbers update the automatic progression tracker.
 
 ### missed_workout — Log a missed session
 ```json
@@ -179,6 +179,17 @@ USE WHEN: Jason asks to change volume, swap an exercise, or adjust weight. Also 
 {"action": "override_block", "name": "Early Mini-Cut", "phase": "mini_cut|bulk|final_cut|maintenance", "start_date": "YYYY-MM-DD", "calorie_target": 2400, "protein_target": 180, "fat_min": 50, "fat_max": 70, "notes": "optional"}
 ```
 USE WHEN: Jason wants to start a phase early, extend one, or otherwise deviate from the hardcoded timeline. Rarely needed — phases auto-apply by date.
+
+### seed_progression — Initialize exercise starting weights
+```json
+{"action": "seed_progression", "exercises": [{"exercise": "incline_bb_press", "weight_kg": 60}, {"exercise": "incline_db_press", "weight_kg": 22}]}
+```
+USE WHEN: Jason provides starting weights for exercises to initialize progression tracking. Each exercise starts at the bottom of its own rep range (6 for "6-8", 10 for "10-12", 15 for "15-20", etc.). This is a one-time setup per exercise or can be used to reset an exercise's progression. You can optionally include "starting_reps" to override the default bottom-of-range.
+VALID EXERCISE SLUGS (must match exactly):
+  Day 1: incline_bb_press, incline_db_press, cable_fly_low_high, lateral_raise_db, lateral_raise_cable, tricep_pushdown, overhead_tricep_ext
+  Day 2: pullup, chest_supported_row, straight_arm_pulldown, reverse_cable_fly, face_pull, barbell_curl, hammer_curl, db_shrug, neck_curl_ext, lateral_raise_finisher
+  Day 3: back_squat, romanian_deadlift, leg_curl, calf_raise, cable_crunch, hanging_leg_raise (ab_wheel excluded)
+  Day 4: db_shoulder_press, lateral_raise_heavy, lateral_raise_cable_drop, incline_db_fly, ss_curl_skull, ss_incline_curl_oh_ext, db_shrug, neck_curl_ext (farmers_carry excluded)
 
 ### query_fitness — Fitness status + today's workout
 ```json

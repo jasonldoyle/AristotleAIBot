@@ -22,6 +22,8 @@ from plato.db.fitness import (
     log_daily_nutrition, log_nutrition_batch, get_nutrition_averages, get_daily_nutrition,
     log_sleep, get_sleep_average,
     get_active_deload_cycle, start_deload_cycle, increment_deload_week, complete_deload,
+    seed_progression, get_exercise_prescription, get_day_prescription,
+    advance_progression, sync_progression_from_actual, auto_complete_week,
     format_fitness_summary, format_fitness_detail, get_fitness_prompt,
     TRAINING_SPLIT, DAY_WEEKDAY_MAP,
 )
@@ -87,6 +89,13 @@ __all__ = [
     "start_deload_cycle",
     "increment_deload_week",
     "complete_deload",
+    # Progression engine
+    "seed_progression",
+    "get_exercise_prescription",
+    "get_day_prescription",
+    "advance_progression",
+    "sync_progression_from_actual",
+    "auto_complete_week",
     "format_fitness_summary",
     "format_fitness_detail",
     "get_fitness_prompt",

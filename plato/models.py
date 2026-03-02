@@ -194,6 +194,18 @@ class SleepLog(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class ExerciseProgression(Base):
+    __tablename__ = "exercise_progression"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
+    exercise = Column(String, nullable=False, unique=True)   # exercise slug from TRAINING_SPLIT
+    weight_kg = Column(Float, nullable=False)
+    current_reps = Column(Integer, nullable=False)           # target reps within the exercise's range
+    sessions_at_current = Column(Integer, nullable=False, default=0)  # 0 or 1; resets on rep bump
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class DeloadTracker(Base):
     __tablename__ = "deload_tracker"
 

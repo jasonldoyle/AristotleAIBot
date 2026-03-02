@@ -43,6 +43,12 @@ from plato.db import (
     create_override_block,
     get_current_block,
     format_fitness_detail,
+    # Progression engine
+    seed_progression,
+    get_day_prescription,
+    advance_progression,
+    sync_progression_from_actual,
+    auto_complete_week,
     TRAINING_SPLIT,
     DAY_WEEKDAY_MAP,
 )
@@ -150,10 +156,27 @@ def process_action(action: dict) -> str:
                 events = action["events"]
                 week = action.get("week", "this")
                 week_start = _compute_week_start(week)
+
+                # Auto-complete unlogged sessions from current week before planning
+                current_week_start = _compute_week_start("this")
+                auto_results = auto_complete_week(current_week_start)
+                auto_completed = [r for r in auto_results if r["status"] == "auto_completed"]
+
                 plan_id = save_pending_plan(week_start, events)
 
                 # Format preview
-                lines = [f"Week of {week_start}:\n"]
+                lines = []
+
+                # Report auto-completion if it happened
+                if auto_completed:
+                    day_strs = []
+                    for r in auto_completed:
+                        day_info = TRAINING_SPLIT.get(r["day_label"], {})
+                        day_short = day_info.get("weekday", r["day_label"])[:3]
+                        day_strs.append(f"{day_short} {r['date'][-5:]} ✓")
+                    lines.append(f"Auto-completed {len(auto_completed)} session(s) from this week ({', '.join(day_strs)}). Progressions advanced.\n")
+
+                lines.append(f"Week of {week_start}:\n")
                 current_date = None
                 for ev in sorted(events, key=lambda e: (e["date"], e["start"])):
                     if ev["date"] != current_date:
@@ -161,6 +184,20 @@ def process_action(action: dict) -> str:
                         day_name = datetime.strptime(ev["date"], "%Y-%m-%d").strftime("%A %b %d")
                         lines.append(f"\n{day_name}:")
                     lines.append(f"  {ev['start']}-{ev['end']}: {ev['title']} [{ev.get('category', '')}]")
+
+                # Append workout prescriptions for the planned week
+                lines.append("\n\n--- Workout Prescriptions ---")
+                for day_label_key in ["day1_chest", "day2_back", "day3_legs", "day4_shoulders"]:
+                    day_info = TRAINING_SPLIT[day_label_key]
+                    prescriptions = get_day_prescription(day_label_key)
+                    lines.append(f"\n{day_info['weekday']} ({day_info['label']}):")
+                    for p in prescriptions:
+                        if p.get("excluded"):
+                            lines.append(f"  {p['display']}: {p['sets']}×{p['reps']}")
+                        elif p.get("needs_seed"):
+                            lines.append(f"  {p['display']}: ⚠ needs seeding ({p['rep_range']})")
+                        else:
+                            lines.append(f"  {p['display']}: {p['weight_kg']}kg × {p['sets']}×{p['reps']}")
 
                 lines.append(f"\nTotal events: {len(events)}")
                 lines.append("Reply 'approve' to push to Google Calendar, or suggest changes.")
@@ -299,14 +336,29 @@ def process_action(action: dict) -> str:
                     log_session(date_str, day_label, status=status, feedback=feedback,
                                 deviation_notes=action.get("deviation_notes"))
 
-                # Log any lifts
+                # Log any lifts and sync progression state
                 count = 0
+                progression_updates = []
                 if lifts:
                     count = log_exercises_bulk(ws["id"], lifts)
+                    # Sync progression to match actual reported numbers
+                    for lift in lifts:
+                        sync_result = sync_progression_from_actual(
+                            lift["exercise"], lift["weight_kg"], lift["reps"]
+                        )
+                        if sync_result and sync_result.get("synced"):
+                            progression_updates.append(
+                                f"{lift['exercise']}: adjusted to {lift['weight_kg']}kg×{lift['reps']}"
+                            )
+                    # Advance progression from reported state
+                    for lift in lifts:
+                        advance_progression(lift["exercise"])
 
                 parts = [f"Workout logged: {day_label} on {date_str} [{status}]"]
                 if count:
                     parts.append(f"{count} exercise(s) recorded")
+                if progression_updates:
+                    parts.append(f"Progression synced: {'; '.join(progression_updates)}")
                 if feedback:
                     parts.append(f"Feedback: {feedback}")
                 return ". ".join(parts) + "."
@@ -401,6 +453,28 @@ def process_action(action: dict) -> str:
                     notes=action.get("notes"),
                 )
                 return f"Phase override created: {action['name']} ({action['phase']}) starting {action['start_date']}."
+
+            case "seed_progression":
+                exercises = action.get("exercises", [])
+                if not exercises:
+                    return "No exercises provided for seeding."
+                results = []
+                for entry in exercises:
+                    result = seed_progression(
+                        exercise=entry["exercise"],
+                        weight_kg=entry["weight_kg"],
+                        starting_reps=entry.get("starting_reps"),
+                    )
+                    ex_info = TRAINING_SPLIT
+                    # Find display name
+                    display = entry["exercise"]
+                    for day_data in TRAINING_SPLIT.values():
+                        for ex in day_data["exercises"]:
+                            if ex["name"] == entry["exercise"]:
+                                display = ex["display"]
+                                break
+                    results.append(f"{display}: {result['weight_kg']}kg × {result['current_reps']} reps [{result['status']}]")
+                return f"Seeded {len(results)} exercise(s):\n" + "\n".join(results)
 
             case "query_fitness":
                 return format_fitness_detail()
